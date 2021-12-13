@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script type="text/javascript" src="https://unpkg.com/chroma-js/chroma.min.js"></script>
+
+  <style type="text/css">
+      #map {
+          width: 100%;
+          height: 800px;
+          border: 1px solid lightgray;
+      }
+  </style>
+</head>
+<body>
+  <div id="app">
+    Input: <input type="file" name="input file" id="file" @change="fileChanged">
+    V:{{V}} &nbsp; E:{{E}} &nbsp;
+    Node color:
+    <select v-model="nodeColor" @change="nodeColorSelectorChanged">
+      <option>none</option>
+      <option>population</option>
+      <option>PV area</option>
+      <option>cost</option>
+    </select> &nbsp;
+    Edge color:
+    <select v-model="edgeColor" @change="edgeColorSelectorChanged">
+      <option>none</option>
+      <option>distance</option>
+    </select>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/vue@next"></script>
+  <script>
+    const App = {
+      setup() {
+        // reactive varialbes
+        const V = Vue.ref(0)
+        const E = Vue.ref(0)
+        const nodeColor = Vue.ref('none')
+        const edgeColor = Vue.ref('none')
+
+        // nodes and edges input data
+        const nodes = []
+        const edges = []
+
+        // nodes and edges data for vis.js
+        const visNodes = new vis.DataSet()
+        const visEdges = new vis.DataSet()
+
+        // handler for node color selector
+        const nodeColorSelectorChanged = () => {
+          const updater = []
+          for ( let i = 0 ; i < nodes.length ; i++ ) {
+            updater.push(setNodeColor(nodes[i], {id: nodes[i].id}))
+          }
+          visNodes.update(updater)
+        }
+
+        const nodeColorScale = chroma.scale('OrRd').padding([0.1, 0])
+        // define node color
+        const setNodeColor = (n, vn) => {
+          if ( nodeColor.value == 'population' ) {
+            const c = nodeColorScale( Math.min(n.p / 40.0, 1.0) ).hex()
+            vn.color = {background: c, border: c}
+          } else if ( nodeColor.value == 'PV area' ) {
+            const c = nodeColorScale( Math.min(n.A / 3000.0, 1.0) ).hex()
+            vn.color = {background: c, border: c}
+          } else if ( nodeColor.value == 'cost' ) {
+            const c = nodeColorScale( Math.min(n.l / 100.0, 1.0) ).hex()
+            vn.color = {background: c, border: c}
+          } else {
+            vn.color = null
+          }
+          return vn
+        }
+
+        // handler for edge color selector
+        const edgeColorSelectorChanged = () => {
+          const updater = []
+          for ( let i = 0 ; i < edges.length ; i++ ) {
+            updater.push(setEdgeColor(edges[i], {id: edges[i].id}))
+          }
+          visEdges.update(updater)
+        }
+
+        const edgeColorScale = chroma.scale('YlGn').gamma(0.5).padding([0.1, 0])
+        // define edge color
+        const setEdgeColor = (e, ve) => {
+          if ( edgeColor.value == 'distance' ) {
+            const c = edgeColorScale( Math.min(e.d / 30.0, 1.0) ).hex()
+            ve.color = c
+            ve.width = 6
+          } else {
+            ve.color = '#999999'
+            ve.width = 2
+          }
+          return ve
+        }
+
+        // handler for file input
+        const fileChanged = () => {
+          const f = document.getElementById('file').files[0]
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const lines = reader.result.split('\n')
+            readGraph(lines)
+            drawMap()
+          }
+          reader.readAsText(f)
+        }
+
+        // draw map
+        const drawMap = () => {
+          visNodes.clear()
+          visEdges.clear()
+
+          const nodesToAdd = []
+          nodes.forEach((n) => {
+            const title = `id:${n.id},x:${n.x},y:${n.y},p:${n.p},A:${n.A},l:${n.l}`
+            const vn = {id: n.id, x: n.x, y: -n.y, shape: 'dot', title: title, size: Math.min(n.nearest * 10, 50)}
+            nodesToAdd.push( setNodeColor(n, vn) )
+          })
+          visNodes.add( nodesToAdd )
+
+          const edgesToAdd = []
+          edges.forEach((e) => {
+            const title = `d:${e.d}`
+            const ve = {id: e.id, from: e.u, to: e.v, title: title, width: 2}
+            edgesToAdd.push( setEdgeColor(e, ve) )
+          })
+          visEdges.add( edgesToAdd )
+
+          const container = document.getElementById('map')
+          const data = { nodes: visNodes, edges: visEdges }
+          const options = {interaction: {dragNodes: false, tooltipDelay: 100}, physics: {enabled: false}}
+          const map = new vis.Network(container, data, options);
+        }
+
+        const getLineNo = (lines, str, start) => {
+          for ( let i = start; i < lines.length ; i++ ) {
+            if ( lines[i].startsWith(str) ) return i
+          }
+          return -1
+        }
+
+        const readGraph = (lines) => {
+          const start = getLineNo(lines, 'graph', 0)
+          let line = lines[start + 1].split(' ')
+          V.value = parseInt(line[0], 10)
+          E.value = parseInt(line[1], 10)
+          nodes.splice(0)
+          for ( let i = start + 2 ; i < start + 2 + V.value ; i++ ) {
+            line = lines[i].split(' ')
+            const x = parseInt(line[0], 10)
+            const y = parseInt(line[1], 10)
+            const p = parseInt(line[2], 10)
+            const A = parseInt(line[3], 10)
+            const l = parseInt(line[4], 10)
+            const id = i - start - 1
+            nodes.push({id: id, x: x, y: y, p: p, A: A, l: l, nearest: 1000})
+          }
+          edges.splice(0)
+          for ( let i = start + 2 + V.value ; i < start + 2 + V.value + E.value ; i++ ) {
+            line = lines[i].split(' ')
+            const u = parseInt(line[0], 10)
+            const v = parseInt(line[1], 10)
+            const d = parseInt(line[2], 10)
+            const id = i - start - 1 - V.value
+            edges.push({id: id, u: u, v: v, d: d})
+
+            nodes[u - 1].nearest = Math.min(nodes[u - 1].nearest, d)
+            nodes[v - 1].nearest = Math.min(nodes[v - 1].nearest, d)
+          }
+        }
+        return {
+          V, E, nodeColor, edgeColor,
+          nodeColorSelectorChanged, 
+          edgeColorSelectorChanged, 
+          fileChanged,
+        }
+      },
+      mounted() {
+      }
+    }
+    Vue.createApp(App).mount('#app')
+  </script>
+</body>
+</html>
