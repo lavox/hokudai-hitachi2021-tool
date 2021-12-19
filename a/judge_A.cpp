@@ -2137,8 +2137,12 @@ class judge {
     if (outlog_fp) {
       fclose(outlog_fp);
     }
+    if (vislog_fp) {
+      fclose(vislog_fp);
+    }
   }
   FILE *outlog_fp = NULL;
+  FILE *vislog_fp = NULL;
   std::vector<vertex> v;
   std::vector<int> v_p;
   graph<edge> g;
@@ -2192,6 +2196,7 @@ class judge {
   double env_buy;
   double acc_factor;
   void open_outlog();
+  void open_vislog();
   double calc_day_score(size_t day,
                         double trans_score,
                         double ele_score,
@@ -2266,6 +2271,9 @@ class judge {
   int createNanoGrid(const size_t day, Main &main);
   void out2020_1(const Main &main, std::ostream &dest, bool comment);
   void out2020_2(const Main &main, std::ostream &dest, bool comment);
+  void out_vislog_for_turn(const Main &main, std::ostream &dest, std::string &command);
+  void out_vislog_for_order(Main &main, std::ostream &dest);
+  void out_vislog_for_init(std::ostream &dest);
   std::string run_Algorithm(const bool submitFlag,
                             Main &main,
                             const size_t &time,
@@ -2705,6 +2713,7 @@ using namespace std;
 int SUBMIT_SEED = 0;
 RandomHelper random_helper(RANDOM_SEED);
 bool outlog = false;
+bool vislog = true;
 void judge::open_outlog() {
   if (!outlog) {
     return;
@@ -2716,6 +2725,18 @@ void judge::open_outlog() {
   timeinfo = localtime(&rawtime);
   strftime(fname, sizeof(fname), "outlog_%Y%m%d_%H%M%S.log", timeinfo);
   outlog_fp = fopen(fname, "w");
+}
+void judge::open_vislog() {
+  if (!vislog) {
+    return;
+  }
+  char fname[1024];
+  time_t rawtime;
+  struct tm *timeinfo;
+  time(&rawtime);
+  timeinfo = localtime(&rawtime);
+  strftime(fname, sizeof(fname), "vislog_%Y%m%d_%H%M%S.log", timeinfo);
+  vislog_fp = fopen(fname, "w");
 }
 double judge::calc_day_score(size_t day,
                              double trans_score,
@@ -4333,6 +4354,62 @@ void judge::out2020_2(const Main &main, std::ostream &dest, bool comment) {
   }
   dest << std::flush;
 }
+void judge::out_vislog_for_turn(const Main &main, std::ostream &dest, std::string &command) {
+  // nano grid data
+  // x cap pw_actual L_FE L_buy
+  for (size_t i = 0; i < main.A_Data.grids.size(); ++i) {
+    auto &g = main.A_Data.grids[i];
+    dest << (g->vertex + 1) << " "
+        << this->g.nodes[g->vertex].cap << " "
+        << this->g.nodes[g->vertex].pw_actual << " "
+        << this->g.nodes[g->vertex].L_FE << " "
+        << this->g.nodes[g->vertex].L_buy << "\n";
+  }
+  dest << std::flush;
+  // EV data
+  // charge v1 v2 d1 d2 order# o1 o2 ... command
+  std::stringstream cs{command};
+  std::string buf;
+  for (size_t i = 0; i < main.A_Data.vehicles.size(); ++i) {
+    auto &v = main.A_Data.vehicles[i];
+    dest << v->charge << " "
+          << (v->vertex1 + 1) << " " << (v->vertex2 + 1) << " "
+          << v->dist1 << " " << v->dist2 << " "
+          << v->numCarryingOrders;
+    for (size_t j = 0; j < (size_t)v->numCarryingOrders; ++j) {
+      dest << " " << (v->carryingOrders[j]->id + 1);
+    }
+    std::getline(cs, buf);
+    dest << " " << buf;
+    dest << std::endl;
+  }
+  dest << std::flush;
+}
+void judge::out_vislog_for_order(Main &main, std::ostream &dest) {
+  double score = 0.0;
+  // order#
+  // from to dist start_time end_time
+  dest << now_orders.size() << "\n";
+  for (const order &o : now_orders) {
+    int dist = main.dist(o.from, o.to);
+    dest << o.from + 1 << " " << o.to + 1 << " " << dist << " "
+      << o.start_time << " " << o.end_time << " " << o.vehicle_id + 1 << "\n";
+  }
+}
+void judge::out_vislog_for_init(std::ostream &dest) {
+  dest << Grid_Info.N_grid << "\n";
+  for (auto &g : Grid_Info.data_list) {
+    dest << (g.x_grid_pos + 1) << " " << g.chg_grid_init << "\n";
+    dest << g.type_grid_PV << " " << g.A_grid_PV << "\n";
+    dest << g.type_grid_FE << "\n";
+    dest << g.type_grid_RB << " " << g.A_grid_RB << "\n";
+    dest << g.type_grid_PCS << "\n";
+  }
+  dest << ev_info.N_EV << "\n";
+  for (auto &v : ev_info.data_list) {
+    dest << (v.x_EV_pos + 1) << " " << v.Chg_EV_init << " " << v.type_EV << "\n";
+  }
+}
 void judge::dumpForDebuggingScore(std::ofstream &ev1,
                                   std::ofstream &ev2,
                                   std::ofstream &grid1,
@@ -4548,6 +4625,12 @@ std::string judge::run_Algorithm(const bool submitFlag,
     fprintf(outlog_fp, "#Command List\n");
     fwrite(commandResult.c_str(), 1, commandResult.length(), outlog_fp);
   }
+  if (submitFlag && vislog_fp) {
+    std::ostringstream oss;
+    out_vislog_for_turn(main, oss, commandResult);
+    std::string str = oss.str();
+    fwrite(str.c_str(), 1, str.length(), vislog_fp);
+  }
   return commandResult;
 }
 void judge::loadStat(StatusOnAcc &acc_stat) {
@@ -4632,6 +4715,10 @@ double run_alg(const bool submitFlag,
   double C_grid_0 = Judge.current_all_grid_charge();
   double C_EV_0 = Judge.current_all_EV_charge(main);
   bool onAcc = (acc_stat != nullptr && acc_stat->acc_mode);
+  if (submitFlag && Common.vislog_fp && !onAcc) {
+    fprintf(Common.vislog_fp, "# day %d\n%d %d\n", 
+      day, main.A_Data.grids.size(), main.A_Data.vehicles.size());
+  }
   if (onAcc) {
     for (auto &slt : Common.shlt.shelter_data) {
       do { if (!(slt.x >= 0 && (size_t)slt.x < main.A_Data.vertexToGrid.size())) exit(1); } while (0);
@@ -4725,6 +4812,22 @@ double run_alg(const bool submitFlag,
   if (false) fprintf(stderr, "###Debug <<<run_alg(submitFlag=%d)\n",
                       submitFlag);
   int day_score = Judge.calc_day_score(day, trans_score, ele_score, env_score);
+
+  if (submitFlag && Common.vislog_fp) {
+    // order information
+    std::ostringstream oss;
+    Common.out_vislog_for_order(main, oss);
+    std::string str = oss.str();
+    fwrite(str.c_str(), 1, str.length(), Common.vislog_fp);
+
+    // score information
+    // C_balance C_EV_tmax C_EV_0 C_EV_return C_grid_tmax C_grid_0
+    fprintf(Common.vislog_fp, "%.0f %.0f %.0f %.0f %.0f %.0f\n", 
+      C_balance, C_EV_tmax, C_EV_0, C_EV_return, C_grid_tmax, C_grid_0);
+    // score score_trans score_ele score_env
+    fprintf(Common.vislog_fp, "%d %.4f %.4f %.4f\n", 
+      day_score, trans_score, ele_score, env_score);
+  }
   return day_score;
 }
 double main2() {
@@ -4733,6 +4836,7 @@ double main2() {
   score2 base;
   judge Common;
   Common.open_outlog();
+  Common.open_vislog();
   FILE *fp, *contestant_output, *time_step_result;
   fp = stdin;
   contestant_output = stdout;
@@ -4796,6 +4900,12 @@ double main2() {
       ;
       fflush(contestant_output);
     } else if (cmd_args[0] == "submit") {
+      if (Common.vislog_fp) {
+        std::ostringstream oss;
+        Common.out_vislog_for_init(oss);
+        std::string str = oss.str();
+        fwrite(str.c_str(), 1, str.length(), Common.vislog_fp);
+      }
       random_helper.set_seed(SUBMIT_SEED);
       ;
       submitFlg = true;
@@ -4839,6 +4949,9 @@ double main2() {
       if (Common.outlog_fp) {
         fprintf(Common.outlog_fp, "#Total Score\n");
         fprintf(Common.outlog_fp, "%lf\n", total_score);
+      }
+      if (Common.vislog_fp) {
+        fprintf(Common.vislog_fp, "%.4f %d %.2f\n", acc_score, Common.C_total, total_score);
       }
     }
     else {

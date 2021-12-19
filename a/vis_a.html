@@ -1,190 +1,1070 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
   <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script type="text/javascript" src="https://unpkg.com/chroma-js/chroma.min.js"></script>
 
   <style type="text/css">
       #map {
-          width: 100%;
-          height: 800px;
-          border: 1px solid lightgray;
+        width: 100%;
+        height: 800px;
+        border: 1px solid lightgray;
+      }
+      #turn_slider {
+        width: 100%;
+      }
+      #day_selector {
+        width: 180px;
+      }
+      table#stats {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      table#stats, table#stats tr, table#stats th, table#stats td {
+        border: 1px #000000 solid;
+      }
+      table#stats div {
+        position: absolute;
+        top: 0px;
+        height: 100%;
+      }
+      .text_center {
+        text-align: center;
+      }
+      .text_right {
+        text-align: right;
+      }
+      .timeline {
+        position: relative;
+      }
+      .show_stats {
+        display: inline-block;
+        text-align: right;
+      }
+      .square {
+        display: inline-block;
+        width: 1.5ch;
+        height: 1.5ch;
+        border: 1px #999999 solid;
       }
   </style>
+  <title>Visualizer</title>
 </head>
 <body>
-  <div id="app">
+<div id="app">
+  <div>
     Input: <input type="file" name="input file" id="file" @change="fileChanged">
-    V:{{V}} &nbsp; E:{{E}} &nbsp;
+    V:{{input.graph.V}} &nbsp; E:{{input.graph.E}} &nbsp;
     Node color:
-    <select v-model="nodeColor" @change="nodeColorSelectorChanged">
+    <select v-model="nodeColor">
       <option>none</option>
       <option>population</option>
       <option>PV area</option>
       <option>cost</option>
     </select> &nbsp;
     Edge color:
-    <select v-model="edgeColor" @change="edgeColorSelectorChanged">
+    <select v-model="edgeColor">
       <option>none</option>
       <option>distance</option>
     </select>
+    &nbsp;
+    <a href="https://github.com/lavox/hokudai-hitachi2021-tool" target="_blank">使用方法(usage)</a>
+  </div>
+  <div>
+    vislog: <input type="file" name="vislog file" id="vislog_file" @change="vislogFileChanged" :disabled="input.graph.V == 0">&nbsp;
+    Score:
+    <span v-if="!vislogUnloaded">
+      total={{ vislog_score.total.toFixed(2) }},
+      acc={{ (input.score.a_acc * vislog_score.S_acc).toFixed(2) }},
+      cost_penalty={{ -(input.score.a_cost * vislog_score.cost_over).toFixed(2) }}
+    </span>
+  </div>
+  <div>
+    <select id="day_selector" v-model="sim.day" :disabled="vislogUnloaded">
+      <option v-for="d in sim.daySelectionData" :value="d.day">{{ d.text }} ({{ d.score.toFixed(2) }})</option>
+    </select>
+    slow<input type="range" name="speed" min="0" :max="10" v-model.number="speed" :disabled="vislogUnloaded">fast&nbsp;
+  </div>
+  <div style="display: flex;">
+    <div style="flex: 0 60px;">
+      <input style="width: 50px;" type="button" name="auto_play_button" :value="auto_play_button" @click="playToggle" :disabled="vislogUnloaded">
+    </div>
+    <div style="flex: 1;">
+      <input id="turn_slider" type="range" name="turn_slider" min="0" :max="input.temporal.T_max" step="1" v-model.number="sim.turn" :disabled="vislogUnloaded">
+    </div>
+    <div style="flex: 0 50px; text-align: right;">
+      turn:
+    </div>
+    <div style="flex: 0 60px;">
+      <input style="width: 100%;" type="number" min="0" :max="input.temporal.T_max" step="1" v-model.number="sim.turn" :disabled="vislogUnloaded">
+    </div>
   </div>
   <div id="map"></div>
+  <div v-if="!vislogUnloaded">
+    C<sup>balance</sup>:<span class="show_stats" style="width: 80px;">{{sim.ele.C_balance.toFixed(0)}}</span>&nbsp;
+    [
+    d_C<sup>grid</sup>:<span class="show_stats" style="width: 80px;">{{sim.ele.d_C_grid.toFixed(0)}}</span>,&nbsp;
+    d_C<sup>EV</sup>:<span class="show_stats" style="width: 80px;">{{sim.ele.d_C_EV.toFixed(0)}}</span>,&nbsp;
+    d_C<sup>EV</sup><sub>ret</sub>:<span class="show_stats" style="width: 80px;">{{sim.ele.d_C_EV_ret.toFixed(0)}}</span>
+    ],&nbsp;
+    L<sup>FE</sup>:<span class="show_stats" style="width: 80px;">{{sim.ele.L_FE.toFixed(0)}}</span>,&nbsp;
+    L<sup>buy</sup>:<span class="show_stats" style="width: 80px;">{{sim.ele.L_buy.toFixed(0)}}</span>,&nbsp;
+  </div>
+  <div v-if="!vislogUnloaded">
+    S<sub>day</sub>:<span class="show_stats" style="width: 80px;">{{(input.score.w_trans * sim.score.trans + input.score.w_ele * sim.score.ele + input.score.w_env * sim.score.env).toFixed(0)}}</span>,&nbsp;
+    S<sub>trans</sub>:<span class="show_stats" style="width: 80px;">{{sim.score.trans.toFixed(0)}}</span>,&nbsp;
+    S<sub>ele</sub>:<span class="show_stats" style="width: 80px;">{{sim.score.ele.toFixed(0)}}</span>,&nbsp;
+    S<sub>env</sub>:<span class="show_stats" style="width: 80px;">{{sim.score.env.toFixed(0)}}</span>,&nbsp;
+  </div>
 
-  <script src="https://unpkg.com/vue@next"></script>
-  <script>
-    const App = {
-      setup() {
-        // reactive varialbes
-        const V = Vue.ref(0)
-        const E = Vue.ref(0)
-        const nodeColor = Vue.ref('none')
-        const edgeColor = Vue.ref('none')
+  <h2>EV and Order stats</h2>
+  EV: 
+  <span class="square" style="background-color: #ff0000;"></span>:stay,
+  <span class="square" style="background-color: #00ff00;"></span>:move/pickup,
+  <span class="square" style="background-color: #ffff00;"></span>:charge from grid,
+  <span class="square" style="background-color: #00ffff;"></span>:charge to grid,
+  <br>
+  Order: 
+  <span class="square" style="background-color: #00ffff;"></span>:unpicked,
+  <span class="square" style="background-color: #0080ff;"></span>:being carried,
+  <div v-for="ev in stats.EV">
+    <h3 v-if="!ev.dummy">EV #{{ ev.id }}</h3>
+    <h3 v-if="ev.dummy">Unpicked order</h3>
+    <table id="stats">
+      <tr>
+        <th style="width: 40px;">No</th>
+        <th style="width: 160px;">info</th>
+        <th>Timeline</th>
+        <th style="width: 60px;">Score</th>
+      </tr>
+      <tr v-if="!ev.dummy">
+        <td class="text_center">EV</td>
+        <td class="text_center">x:{{ev.x}},Chg:{{ev.Chg}}</td>
+        <td class="timeline">
+          <div v-for="h in ev.history" :style="h.style"></div>
+        </td>
+        <td class="text_right">{{ev.score.toFixed(0)}}</td>
+      </tr>
+      <tr v-for="o in ev.order">
+        <td class="text_center">{{o.id}}</td>
+        <td class="text_center">{{o.from}}->{{o.to}}, dist:{{o.dist}}</td>
+        <td class="timeline">
+          <div v-for="h in o.history" :style="h.style"></div>
+        </td>
+        <td class="text_right">{{o.score.toFixed(0)}}</td>
+      </tr>
+    </table>
+  </div>
+</div>
+<script src="https://unpkg.com/vue@next"></script>
+<script>
+//////////////////////////////////////// Common function
+// get line number starts with str
+const getLineNo = (lines, str, start) => {
+  for ( let i = start; i < lines.length ; i++ ) {
+    if ( lines[i].startsWith(str) ) return i
+  }
+  return -1
+}
+// command type
+const COM_TYPE = [
+  {type: 0, command: 'stay', param: false, offset: 0, color: '#ff0000', group: 0},
+  {type: 1, command: 'move', param: true, offset: -1, color: '#00ff00', group: 1},
+  {type: 2, command: 'pickup', param: true, offset: -1, color: '#ff00ff', group: 1},
+  {type: 3, command: 'charge_from_grid', param: true, offset: 0, color: '#ffff00', group: 2},
+  {type: 4, command: 'charge_to_grid', param: true, offset: 0, color: '#00ffff', group: 3},
+  {type: 5, command: '-', param: false, offset: 0, color: 'ff0000', group: 4},
+]
 
-        // nodes and edges input data
-        const nodes = []
-        const edges = []
+//////////////////////////////////////// Input file
+const useInputFile = (input, graph, visjs) => {
+  // handler
+  const fileChanged = () => {
+    const f = document.getElementById('file').files[0]
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const lines = reader.result.split('\n')
+      readInput(lines)
+    }
+    reader.readAsText(f)
+  }
 
-        // nodes and edges data for vis.js
-        const visNodes = new vis.DataSet()
-        const visEdges = new vis.DataSet()
+  const readInput = (lines) => {
+    // budget
+    let start = getLineNo(lines, 'budget', 0)
+    let line = lines[++start].split(' ')
+    input.budget = parseInt(line[0], 10)
+    // temporal
+    start = getLineNo(lines, 'temporal', start)
+    line = lines[++start].split(' ')
+    input.temporal.T_max = parseInt(line[0], 10)
+    input.temporal.T_last = parseInt(line[1], 10)
+    input.temporal.N_div = parseInt(line[2], 10)
+    input.temporal.N_day = parseInt(line[3], 10)
+    input.temporal.N_acc = parseInt(line[4], 10)
+    // score
+    start = getLineNo(lines, 'score', start)
+    line = lines[++start].split(' ')
+    input.score.a_cost = parseInt(line[0], 10)
+    line = lines[++start].split(' ')
+    input.score.w_day = []
+    for (let i = 0; i < input.temporal.N_day; i++) {
+      input.score.w_day.push(parseInt(line[i], 10))
+    }
+    line = lines[++start].split(' ')
+    input.score.w_trans = parseFloat(line[0])
+    input.score.w_ele = parseFloat(line[1])
+    input.score.w_env = parseFloat(line[2])
+    input.score.w_acc = parseFloat(line[3])
+    line = lines[++start].split(' ')
+    input.score.a_trans_fee = parseFloat(line[0])
+    input.score.a_trans_penalty = parseFloat(line[1])
+    line = lines[++start].split(' ')
+    input.score.a_ele = parseFloat(line[0])
+    input.score.a_ele_FE = parseFloat(line[1])
+    input.score.a_ele_buy = parseFloat(line[2])
+    line = lines[++start].split(' ')
+    input.score.a_env_fuel = parseFloat(line[1])
+    input.score.a_env_buy = parseFloat(line[2])
+    line = lines[++start].split(' ')
+    input.score.a_acc = parseInt(line[0], 10)
 
-        // handler for node color selector
-        const nodeColorSelectorChanged = () => {
-          const updater = []
-          for ( let i = 0 ; i < nodes.length ; i++ ) {
-            updater.push(setNodeColor(nodes[i], {id: nodes[i].id}))
-          }
-          visNodes.update(updater)
-        }
+    // graph
+    start = readGraph(lines, start)
 
-        const nodeColorScale = chroma.scale('OrRd').padding([0.1, 0])
-        // define node color
-        const setNodeColor = (n, vn) => {
-          if ( nodeColor.value == 'population' ) {
-            const c = nodeColorScale( Math.min(n.p / 40.0, 1.0) ).hex()
-            vn.color = {background: c, border: c}
-          } else if ( nodeColor.value == 'PV area' ) {
-            const c = nodeColorScale( Math.min(n.A / 3000.0, 1.0) ).hex()
-            vn.color = {background: c, border: c}
-          } else if ( nodeColor.value == 'cost' ) {
-            const c = nodeColorScale( Math.min(n.l / 100.0, 1.0) ).hex()
-            vn.color = {background: c, border: c}
+    // demand (position only)
+    start = getLineNo(lines, 'demand', start)
+    input.demand.splice(0)
+    line = lines[++start].split(' ')
+    let N_demand = parseInt(line[0], 10)
+    for (let i = 0; i < N_demand; i++) {
+      line = lines[i * 2 + start + 2].split(' ')
+      input.demand.push(parseInt(line[0], 10))
+    }
+
+    // asset
+    start = getLineNo(lines, 'asset', start)
+    line = lines[++start].split(' ')
+    let N_PV = parseInt(line[0], 10)
+    input.asset.PV.splice(0)
+    for (let i = 0; i < N_PV; i++) {
+      line = lines[++start].split(' ')
+      const A = parseInt(line[0], 10)
+      const C_init = parseInt(line[1], 10)
+      input.asset.PV.push({A: A, C_init: C_init, desc: `A:${A},C_init:${C_init}`})
+    }
+
+    line = lines[++start].split(' ')
+    let N_FE = parseInt(line[0], 10)
+    input.asset.FE.splice(0)
+    for (let i = 0; i < N_FE; i++) {
+      line = lines[++start].split(' ')
+      const P_max = parseInt(line[1], 10)
+      const C_init = parseInt(line[4], 10)
+      input.asset.FE.push({P_max: P_max, C_init: C_init, desc: `P_max:${P_max},C_init:${C_init}`})
+    }
+
+    line = lines[++start].split(' ')
+    let N_RB = parseInt(line[0], 10)
+    input.asset.RB.splice(0)
+    for (let i = 0; i < N_RB; i++) {
+      line = lines[++start].split(' ')
+      const Cap = parseInt(line[3], 10)
+      const C_init = parseInt(line[4], 10)
+      input.asset.RB.push({Cap: Cap, C_init: C_init, desc: `Cap:${Cap},C_init:${C_init}`})
+    }
+
+    line = lines[++start].split(' ')
+    let N_EVC = parseInt(line[0], 10)
+    input.asset.EVC.splice(0)
+    for (let i = 0; i < N_EVC; i++) {
+      line = lines[++start].split(' ')
+      const P_in = parseInt(line[0], 10)
+      const P_out = parseInt(line[1], 10)
+      const C_init = parseInt(line[2], 10)
+      input.asset.EVC.push({P_in: P_in, P_out: P_out, C_init: C_init, desc: `P_in:${P_in},P_out:${P_out},C_init:${C_init}`})
+    }
+
+    line = lines[++start].split(' ')
+    let N_V = parseInt(line[0], 10)
+    input.asset.V.splice(0)
+    for (let i = 0; i < N_V; i++) {
+      line = lines[++start].split(' ')
+      const Cap_ele = parseInt(line[0], 10)
+      const Cap_pop = parseInt(line[1], 10)
+      line = lines[++start].split(' ')
+      const P_charge = parseInt(line[0], 10)
+      const P_discharge = parseInt(line[1], 10)
+      const C_init = parseInt(line[2], 10)
+      const d_move = parseInt(line[3], 10)
+      input.asset.V.push({Cap_ele: Cap_ele, Cap_pop: Cap_pop,
+        P_charge: P_charge, P_discharge: P_discharge, C_init: C_init, d_move: d_move,
+        desc: `P_charge:${P_charge},P_discharge:${P_discharge},C_init:${C_init},d_move:${d_move}`})
+    }
+
+    // shelter
+    start = getLineNo(lines, 'shelter', start)
+    line = lines[++start].split(' ')
+    let N_shelter = parseInt(line[0], 10)
+    input.shelter.splice(0)
+    for (let i = 0; i < N_shelter; i++) {
+      line = lines[++start].split(' ')
+      const x = parseInt(line[0], 10) - 1
+      const p = parseInt(line[1], 10)
+      input.asset.EVC.push({x: x, p: p})
+    }
+  }
+
+  // read graph
+  const readGraph = (lines, start) => {
+    const g = graph
+    start = getLineNo(lines, 'graph', start)
+    let line = lines[start + 1].split(' ')
+    input.graph.V = parseInt(line[0], 10)
+    input.graph.E = parseInt(line[1], 10)
+    g.nodes.splice(0)
+    for ( let i = start + 2 ; i < start + 2 + input.graph.V ; i++ ) {
+      line = lines[i].split(' ')
+      const x = parseInt(line[0], 10)
+      const y = parseInt(line[1], 10)
+      const p = parseInt(line[2], 10)
+      const A = parseInt(line[3], 10)
+      const l = parseInt(line[4], 10)
+      const id = i - start - 2
+      g.nodes.push({id: id, x: x, y: y, p: p, A: A, l: l, nearest: 1000})
+    }
+    g.edges.splice(0)
+    for ( let i = start + 2 + input.graph.V ; i < start + 2 + input.graph.V + input.graph.E ; i++ ) {
+      line = lines[i].split(' ')
+      const u = parseInt(line[0], 10) - 1
+      const v = parseInt(line[1], 10) - 1
+      const d = parseInt(line[2], 10)
+      const id = i - start - 2 - input.graph.V
+      g.edges.push({id: id, u: u, v: v, d: d})
+
+      g.nodes[u].nearest = Math.min(g.nodes[u].nearest, d)
+      g.nodes[v].nearest = Math.min(g.nodes[v].nearest, d)
+    }
+    return start + 2 + input.graph.V + input.graph.E
+  }
+
+  return { fileChanged }
+}
+
+//////////////////////////////////////// Map for input file
+const useMapForInput = (input, graph, visjs) => {
+  const nodeColor = Vue.ref('none')
+  const edgeColor = Vue.ref('none')
+
+  // draw initial map
+  const drawInitialMap = () => {
+    visjs.nodes.clear()
+    visjs.edges.clear()
+
+    const nodesToAdd = []
+    graph.nodes.forEach((n) => {
+      const title = `id:${n.id + 1},x:${n.x},y:${n.y},p:${n.p},A:${n.A},l:${n.l}`
+      const vn = {id: n.id, x: n.x, y: -n.y, shape: 'dot', title: title, size: Math.min(n.nearest * 10, 50)}
+      nodesToAdd.push( setNodeColor(n, vn) )
+    })
+    visjs.nodes.add( nodesToAdd )
+
+    const edgesToAdd = []
+    graph.edges.forEach((e) => {
+      const title = `d:${e.d}`
+      const ve = {id: e.id, from: e.u, to: e.v, title: title, width: 2, smooth: false}
+      edgesToAdd.push( setEdgeColor(e, ve) )
+    })
+    visjs.edges.add( edgesToAdd )
+
+    const data = { nodes: visjs.nodes, edges: visjs.edges }
+    visjs.map.setData(data)
+  }
+  Vue.watch(input, drawInitialMap)
+
+  // handler for node color selector
+  const nodeColorChanged = () => {
+    const nodes = graph.nodes
+    const updater = []
+    for ( let i = 0 ; i < nodes.length ; i++ ) {
+      updater.push(setNodeColor(nodes[i], {id: nodes[i].id}))
+    }
+    visjs.nodes.update(updater)
+  }
+  Vue.watch(nodeColor, nodeColorChanged)
+
+  const nodeColorScale = chroma.scale('OrRd').padding([0.1, 0])
+  // define node color
+  const setNodeColor = (n, vn) => {
+    if ( nodeColor.value == 'population' ) {
+      const c = nodeColorScale( Math.min(n.p / 40.0, 1.0) ).hex()
+      vn.color = {background: c, border: c}
+    } else if ( nodeColor.value == 'PV area' ) {
+      const c = nodeColorScale( Math.min(n.A / 3000.0, 1.0) ).hex()
+      vn.color = {background: c, border: c}
+    } else if ( nodeColor.value == 'cost' ) {
+      const c = nodeColorScale( Math.min(n.l / 100.0, 1.0) ).hex()
+      vn.color = {background: c, border: c}
+    } else {
+      vn.color = null
+    }
+    return vn
+  }
+
+  // handler for edge color selector
+  const edgeColorChanged = () => {
+    const edges = graph.edges
+    const updater = []
+    for ( let i = 0 ; i < edges.length ; i++ ) {
+      updater.push(setEdgeColor(edges[i], {id: edges[i].id}))
+    }
+    visjs.edges.update(updater)
+  }
+  Vue.watch(edgeColor, edgeColorChanged)
+
+  const edgeColorScale = chroma.scale('YlGn').gamma(0.5).padding([0.1, 0])
+  // define edge color
+  const setEdgeColor = (e, ve) => {
+    if ( edgeColor.value == 'distance' ) {
+      const c = edgeColorScale( Math.min(e.d / 30.0, 1.0) ).hex()
+      ve.color = c
+      ve.width = 6
+    } else {
+      ve.color = '#999999'
+      ve.width = 2
+    }
+    return ve
+  }
+
+  return {nodeColor, edgeColor}
+}
+
+//////////////////////////////////////// Vislog file
+const useVislogFile = (input, graph, visjs, vislog) => {
+  // score
+  const vislog_score = Vue.reactive({
+    total: 0,
+    S_acc: 0,
+    cost_over: 0,
+  })
+
+  // handler for vislog file input
+  const vislogFileChanged = () => {
+    const f = document.getElementById('vislog_file').files[0]
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const lines = reader.result.split('\n')
+      readVislog(lines)
+      vislog.timestamp.value = Date.now()
+    }
+    reader.readAsText(f)
+  }
+
+  const readVislog = (lines) => {
+    let li = 0
+    // nanogrid
+    let line = lines[li].split(' ')
+    let N_nano = parseInt(line[0], 10)
+    vislog.nanogrid.splice(0)
+    for (let i = 0; i < N_nano; i++) {
+      line = lines[++li].split(' ')
+      const x = parseInt(line[0], 10) - 1
+      const Chg = parseInt(line[1], 10)
+      line = lines[++li].split(' ')
+      const type_PV = parseInt(line[0], 10)
+      const A_PV = parseInt(line[1], 10)
+      line = lines[++li].split(' ')
+      const type_FE = parseInt(line[0], 10)
+      line = lines[++li].split(' ')
+      const type_RB = parseInt(line[0], 10)
+      const A_RB = parseInt(line[1], 10)
+      line = lines[++li].split(' ')
+      const type_EVC = parseInt(line[0], 10)
+      vislog.nanogrid.push({x: x, Chg: Chg, type_PV: type_PV, A_PV: A_PV,
+        type_FE: type_FE, type_RB: type_RB, A_RB: A_RB, type_EVC: type_EVC})
+    }
+    // EV
+    line = lines[++li].split(' ')
+    let N_EV = parseInt(line[0], 10)
+    vislog.EV.splice(0)
+    for (let i = 0; i < N_EV; i++) {
+      line = lines[++li].split(' ')
+      const x = parseInt(line[0], 10) - 1
+      const Chg = parseInt(line[1], 10)
+      const type_EV = parseInt(line[2], 10)
+      vislog.EV.push({x: x, Chg: Chg, type_EV: type_EV})
+    }
+
+    vislog.dayData.splice(0)
+    for (let d = 0; d < input.temporal.N_day; d++) {
+      const ret = readVislog_day(lines, ++li)
+      vislog.dayData.push(ret.data)
+      li = ret.li
+    }
+
+    // score
+    line = lines[++li].split(' ')
+    vislog_score.acc = parseFloat(line[0])
+    vislog_score.cost_over = Math.max(0, parseInt(line[1], 10) - input.budget)
+    vislog_score.total = parseFloat(line[2])
+  }
+
+  // read vislog for day
+  const readVislog_day = (lines, li) => {
+    let line = lines[++li].split(' ')
+    const N_nano = parseInt(line[0], 10)
+    const N_EV = parseInt(line[1], 10)
+    const turn_data = []
+    // data for every turn
+    const pickup_time = []
+    for (let t = 0; t < input.temporal.T_max; t++) {
+      const t_data = {nanogrid: [], EV: []}
+      for (let i = 0; i < N_nano; i++) {
+        line = lines[++li].split(' ')
+        const x = parseInt(line[0], 10) - 1
+        const cap = parseInt(line[1], 10)
+        const pw_act = parseInt(line[2], 10)
+        const L_FE = parseInt(line[3], 10)
+        const L_buy = parseInt(line[4], 10)
+        t_data.nanogrid.push({x: x, cap: cap, pw_act: pw_act, L_FE: L_FE, L_buy: L_buy})
+      }
+      for (let i = 0; i < N_EV; i++) {
+        line = lines[++li].split(' ')
+        const charge = parseInt(line[0], 10)
+        const v1 = parseInt(line[1], 10) - 1
+        const v2 = parseInt(line[2], 10) - 1
+        const d1 = parseInt(line[3], 10)
+        const d2 = parseInt(line[4], 10)
+        const ocnt = parseInt(line[5], 10)
+        const order = []
+        for (let j = 0; j < ocnt; j++) {
+          const oid = parseInt(line[6 + j], 10) - 1
+          order.push(oid)
+          if ( pickup_time[oid] == undefined ) {
+            pickup_time[oid] = t
           } else {
-            vn.color = null
-          }
-          return vn
-        }
-
-        // handler for edge color selector
-        const edgeColorSelectorChanged = () => {
-          const updater = []
-          for ( let i = 0 ; i < edges.length ; i++ ) {
-            updater.push(setEdgeColor(edges[i], {id: edges[i].id}))
-          }
-          visEdges.update(updater)
-        }
-
-        const edgeColorScale = chroma.scale('YlGn').gamma(0.5).padding([0.1, 0])
-        // define edge color
-        const setEdgeColor = (e, ve) => {
-          if ( edgeColor.value == 'distance' ) {
-            const c = edgeColorScale( Math.min(e.d / 30.0, 1.0) ).hex()
-            ve.color = c
-            ve.width = 6
-          } else {
-            ve.color = '#999999'
-            ve.width = 2
-          }
-          return ve
-        }
-
-        // handler for file input
-        const fileChanged = () => {
-          const f = document.getElementById('file').files[0]
-          const reader = new FileReader();
-          reader.onload = (ev) => {
-            const lines = reader.result.split('\n')
-            readGraph(lines)
-            drawMap()
-          }
-          reader.readAsText(f)
-        }
-
-        // draw map
-        const drawMap = () => {
-          visNodes.clear()
-          visEdges.clear()
-
-          const nodesToAdd = []
-          nodes.forEach((n) => {
-            const title = `id:${n.id},x:${n.x},y:${n.y},p:${n.p},A:${n.A},l:${n.l}`
-            const vn = {id: n.id, x: n.x, y: -n.y, shape: 'dot', title: title, size: Math.min(n.nearest * 10, 50)}
-            nodesToAdd.push( setNodeColor(n, vn) )
-          })
-          visNodes.add( nodesToAdd )
-
-          const edgesToAdd = []
-          edges.forEach((e) => {
-            const title = `d:${e.d}`
-            const ve = {id: e.id, from: e.u, to: e.v, title: title, width: 2}
-            edgesToAdd.push( setEdgeColor(e, ve) )
-          })
-          visEdges.add( edgesToAdd )
-
-          const container = document.getElementById('map')
-          const data = { nodes: visNodes, edges: visEdges }
-          const options = {interaction: {dragNodes: false, tooltipDelay: 100}, physics: {enabled: false}}
-          const map = new vis.Network(container, data, options);
-        }
-
-        const getLineNo = (lines, str, start) => {
-          for ( let i = start; i < lines.length ; i++ ) {
-            if ( lines[i].startsWith(str) ) return i
-          }
-          return -1
-        }
-
-        const readGraph = (lines) => {
-          const start = getLineNo(lines, 'graph', 0)
-          let line = lines[start + 1].split(' ')
-          V.value = parseInt(line[0], 10)
-          E.value = parseInt(line[1], 10)
-          nodes.splice(0)
-          for ( let i = start + 2 ; i < start + 2 + V.value ; i++ ) {
-            line = lines[i].split(' ')
-            const x = parseInt(line[0], 10)
-            const y = parseInt(line[1], 10)
-            const p = parseInt(line[2], 10)
-            const A = parseInt(line[3], 10)
-            const l = parseInt(line[4], 10)
-            const id = i - start - 1
-            nodes.push({id: id, x: x, y: y, p: p, A: A, l: l, nearest: 1000})
-          }
-          edges.splice(0)
-          for ( let i = start + 2 + V.value ; i < start + 2 + V.value + E.value ; i++ ) {
-            line = lines[i].split(' ')
-            const u = parseInt(line[0], 10)
-            const v = parseInt(line[1], 10)
-            const d = parseInt(line[2], 10)
-            const id = i - start - 1 - V.value
-            edges.push({id: id, u: u, v: v, d: d})
-
-            nodes[u - 1].nearest = Math.min(nodes[u - 1].nearest, d)
-            nodes[v - 1].nearest = Math.min(nodes[v - 1].nearest, d)
+            pickup_time[oid] = Math.min(t, pickup_time[oid])
           }
         }
-        return {
-          V, E, nodeColor, edgeColor,
-          nodeColorSelectorChanged, 
-          edgeColorSelectorChanged, 
-          fileChanged,
-        }
+        const c = {type: 0, param: 0}
+        const command = line[6 + ocnt]
+        COM_TYPE.forEach( elem => {
+          if ( command == elem.command ) {
+            c.type = elem.type
+            if ( elem.param ) {
+              c.param = parseInt(line[7 + ocnt], 10)
+            }
+            return
+          }
+        })
+        t_data.EV.push({charge: charge, v1: v1, v2: v2, d1: d1, d2: d2,
+          order: order, command: c})
+      }
+      turn_data.push(t_data)
+    }
+    // order data
+    line = lines[++li].split(' ')
+    let N_order = parseInt(line[0], 10)
+    const order = []
+    for (let o = 0; o < N_order; o++) {
+      line = lines[++li].split(' ')
+      const from = parseInt(line[0], 10) - 1
+      const to = parseInt(line[1], 10) - 1
+      const dist = parseInt(line[2], 10)
+      const start_time = parseInt(line[3], 10)
+      const end_time = parseInt(line[4], 10)
+      const vid = parseInt(line[5], 10) - 1
+      const pturn = pickup_time[o] == undefined ? Number.MAX_SAFE_INTEGER : pickup_time[o]
+      order.push({id: o, from: from, to: to, dist: dist, 
+        start_time: start_time, end_time: end_time == -1 ? Number.MAX_SAFE_INTEGER : end_time,
+        vid: vid, pickup: pturn})
+    }
+    // electric data
+    line = lines[++li].split(' ')
+    const C_balance = parseInt(line[0], 10)
+    const C_EV_tmax = parseInt(line[1], 10)
+    const C_EV_0 = parseInt(line[2], 10)
+    const C_EV_return = parseInt(line[3], 10)
+    const C_grid_tmax = parseInt(line[4], 10)
+    const C_grid_0 = parseInt(line[5], 10)
+
+    // score data
+    line = lines[++li].split(' ')
+    const day_score = parseInt(line[0], 10)
+    const trans_score = parseFloat(line[1])
+    const ele_score = parseFloat(line[2])
+    const env_score = parseFloat(line[3])
+
+    const data = {
+      turn_data: turn_data,
+      order: order,
+      electric: {
+        C_balance: C_balance, 
+        C_EV_tmax: C_EV_tmax, C_EV_0: C_EV_0, C_EV_return: C_EV_return,
+        C_grid_tmax: C_grid_tmax, C_grid_0: C_grid_0
       },
-      mounted() {
+      score: {
+        total: day_score, trans: trans_score, ele: ele_score, env: env_score
       }
     }
-    Vue.createApp(App).mount('#app')
-  </script>
+
+    return {data: data, li: li}
+  }
+
+  // reset vislog
+  const reset = () => {
+    vislog.nanogrid.splice(0)
+    vislog.EV.splice(0)
+    vislog.dayData.splice(0)
+    vislog.timestamp.value = Date.now()
+    document.getElementById("vislog_file").value = ""
+  }
+  Vue.watch(input, reset)
+
+  // vislog data unloaded flag (vislog.timestamp is for reactivity)
+  const vislogUnloaded = Vue.computed(() => vislog.dayData.length == 0 && vislog.timestamp.value >= 0)
+
+  return {vislogFileChanged, vislogUnloaded, vislog_score}
+}
+
+//////////////////////////////////////// simulation
+const useSimulation = (input, graph, visjs, vislog, sim, vislog_ts) => {
+  // score precalced
+  const precalcedScore = []
+
+  // initialize related data
+  const setDaySelectionData = () => {
+    if ( vislog.dayData.length == 0 ) { return }
+    sim.day = 1
+    sim.daySelectionData.splice(0)
+    for (let i = 1; i <= input.temporal.N_day; i++) {
+      sim.daySelectionData.push({day: i, text: `Day ${i}`, w_d: input.score.w_day[i - 1], score: vislog.dayData[i - 1].score.total})
+    }
+  }
+  //Vue.watch(input, setDaySelectionData)
+  Vue.watch(vislog_ts, setDaySelectionData)
+
+  const initMapForDay = () => {
+    // delete current order and EV data
+    const edgeToRemove = []
+    const nodeToRemove = []
+    sim.EV.forEach( elem => {
+      nodeToRemove.push( elem.nid )
+    } )
+    sim.order.forEach( elem => {
+      nodeToRemove.push( elem.nid )
+      edgeToRemove.push( elem.eid )
+    })
+    visjs.edges.remove(edgeToRemove)
+    visjs.nodes.remove(nodeToRemove)
+
+    sim.EV.splice(0)
+    sim.order.splice(0)
+
+    precalcedScore.splice(0)
+
+    // if initial, quit
+    if ( vislog.dayData.length == 0 ) { return }
+
+    // set EV data
+    for (let i = 0; i < vislog.EV.length; i++) {
+      const data = {id: i, nid: i + 100000, type: input.asset.V[vislog.EV[i].type_EV]}
+      sim.EV.push(setEvForTurn(data.id, sim.turn, data))
+    }
+
+    const nodeToAdd = []
+    const edgeToAdd = []
+    sim.EV.forEach( elem => {
+      const vdata = {id: elem.nid, shape: 'triangle', font: {size: 96}, size: 60, color: '#ff0000', opacity: 0.8}
+      nodeToAdd.push(convertEvToVisData(elem, vdata))
+    })
+
+    // set order data
+    const odata = vislog.dayData[sim.day - 1].order
+    for (let i = 0; i < odata.length; i++) {
+      const o = odata[i]
+      const data = {id: i, nid: i + 1000000, eid: i + 1000000,
+          from: o.from, to: o.to, dist: o.dist, start_time: o.start_time, end_time: o.end_time, vid: o.vid,
+          pickup: o.pickup}
+      sim.order.push(setOrderForTurn(sim.turn, data))
+    }
+
+    sim.order.forEach( elem => {
+      const vndata = {id: elem.nid, shape: 'square', size: 30, color: '#00ffff', opacity: 0.8}
+      const vedata = {id: elem.eid, arrows: {to: true}, dashes: [30, 20], smooth: false, color: '#00ffff', width: 6, opacity: 0.8}
+      const ret = convertOrderToVisData(elem, vndata, vedata)
+      nodeToAdd.push(ret.node)
+      edgeToAdd.push(ret.edge)
+    })
+    visjs.nodes.add(nodeToAdd)
+    visjs.edges.add(edgeToAdd)
+
+    // precalc score
+    const oscore = Array(input.temporal.T_max)
+    oscore.fill(0)
+    const T = input.temporal.T_max
+    vislog.dayData[sim.day - 1].order.forEach( o => {
+      if ( o.pickup <= T && o.end_time <= T ) {
+        const T_wait = o.end_time - o.start_time
+        const score = input.score.a_trans_fee * o.dist - input.score.a_trans_penalty * (T_wait - o.dist) * (T_wait - o.dist)
+        if ( score > 0 ) {
+          oscore[o.end_time] += score
+        }
+      }
+    })
+    // initial
+    let C_grid_0 = 0
+    let C_EV_0 = 0
+    vislog.nanogrid.forEach( g => { C_grid_0 += g.Chg })
+    vislog.EV.forEach( ev => { C_EV_0 += ev.Chg })
+
+    precalcedScore.push({
+      ele: {C_balance: 0, d_C_grid: 0, d_C_EV: 0, d_C_EV_ret: 0, L_FE: 0, L_buy: 0},
+      score: {trans: 0, ele: 0, env: 0}
+    })
+
+    let L_FE = 0
+    let L_buy = 0
+    let S_trans = 0
+    for (let t = 0; t < T; t++) {
+      let C_grid_t = 0
+      let C_EV_t = 0
+      vislog.dayData[sim.day - 1].turn_data[t].nanogrid.forEach( g => {
+        C_grid_t += g.cap
+        L_FE += g.L_FE
+        L_buy += g.L_buy
+      })
+      vislog.dayData[sim.day - 1].turn_data[t].EV.forEach( ev => {
+        C_EV_t += ev.charge
+      })
+      const d_C_grid = C_grid_t - C_grid_0
+      const d_C_EV = C_EV_t - C_EV_0
+      const d_C_EV_ret = t == T - 1 ? -vislog.dayData[sim.day - 1].electric.C_EV_return : 0
+      const C_balance = d_C_grid + d_C_EV + d_C_EV_ret
+      const S_ele = input.score.a_ele * C_balance - input.score.a_ele_FE * L_FE - input.score.a_ele_buy * L_buy
+      const S_env = - input.score.a_env_fuel * L_FE - input.score.a_env_buy * L_buy
+      S_trans += oscore[t]
+      precalcedScore.push({
+        ele: {
+          C_balance: C_balance,
+          d_C_grid: d_C_grid,
+          d_C_EV: d_C_EV,
+          d_C_EV_ret: d_C_EV_ret,
+          L_FE: L_FE,
+          L_buy: L_buy
+        },
+        score: {trans: S_trans, ele: S_ele, env: S_env}
+      })
+    }
+  }
+  Vue.watch(vislog_ts, initMapForDay)
+  Vue.watch(() => sim.day, initMapForDay)
+
+  const setEvForTurn = (id, turn, data) => {
+    if ( turn == 0 ) {
+      const ev = vislog.EV[id]
+      data.charge = ev.Chg
+      data.v1 = ev.x
+      data.v2 = ev.x
+      data.d1 = 0
+      data.d2 = 0
+      data.order = []
+      data.command = {type: 5, param: 0}
+    } else {
+      const evlog = vislog.dayData[sim.day - 1].turn_data[turn - 1].EV[id]
+      data.charge = evlog.charge
+      data.v1 = evlog.v1
+      data.v2 = evlog.v2
+      data.d1 = evlog.d1
+      data.d2 = evlog.d2
+      data.order = evlog.order
+      data.command = evlog.command
+    }
+    return data
+  }
+
+  const convertEvToVisData = (data, vdata) => {
+    const nodes = graph.nodes
+    if ( data.v1 == data.v2 || data.d1 + data.d2 == 0 ) {
+      vdata.x = nodes[data.v1].x
+      vdata.y = -nodes[data.v1].y
+    } else {
+      vdata.x = (nodes[data.v1].x * data.d2 + nodes[data.v2].x * data.d1) / (data.d1 + data.d2)
+      vdata.y = -(nodes[data.v1].y * data.d2 + nodes[data.v2].y * data.d1) / (data.d1 + data.d2)
+    }
+    vdata.label = String(data.order.length)
+    vdata.color = {background: COM_TYPE[data.command.type].color, border: '#999999'}
+    const orderStr = data.order.map(n => n + 1).join(',')
+    const comType = COM_TYPE[data.command.type]
+    const commandStr = comType.param ? comType.command + " " + (data.command.param - comType.offset) : comType.command
+    vdata.title = `charge:${data.charge},order:[${orderStr}]\n${commandStr}`
+    return vdata
+  }
+
+  const setOrderForTurn = (turn, data) => {
+    data.visible = turn == 0 || turn - 1 >= data.start_time
+    data.nodeVisible = data.visible && !(data.pickup <= turn - 1 && turn - 1 < data.end_time)
+    data.edgeVisible = data.visible && turn - 1 < data.end_time
+    data.fromNode = turn == 0 || (data.visible && turn - 1 < data.pickup) || data.vid == -1 ? data.nid : sim.EV[data.vid].nid
+    data.toNode = data.to
+    data.nodePosId = turn - 1 < data.end_time ? data.from : data.to
+    data.picked = turn - 1 >= data.pickup
+    data.ended = turn - 1 >= data.end_time
+    return data
+  }
+
+  const convertOrderToVisData = (data, vndata, vedata) => {
+    vndata.hidden = !data.visible || !data.nodeVisible
+    vedata.hidden = !data.visible || !data.edgeVisible
+
+    const nodes = graph.nodes
+    vndata.x = nodes[data.nodePosId].x
+    vndata.y = -nodes[data.nodePosId].y
+    vndata.color = data.ended ? '#999999' : '#00ffff'
+    vndata.size = data.ended ? 10 : 30
+    vndata.title = `id:${data.id + 1},node:${data.from + 1}->${data.to + 1}`
+
+    vedata.from = data.fromNode
+    vedata.to = data.toNode
+    vedata.color = data.picked ? '#0000ff' : '#00ffff'
+    vedata.title = `id:${data.id + 1},node:${data.from + 1}->${data.to + 1}`
+
+    return {node:vndata, edge:vedata}
+  }
+
+  const updateSimulation = () => {
+    if ( sim.turn > input.temporal.T_max || sim.turn < 0 ) { return }
+
+    const nodeToUpdate = []
+    const edgeToUpdate = []
+    sim.EV.forEach( elem => {
+      const newElem = setEvForTurn(elem.id, sim.turn, Object.assign({}, elem))
+      if ( isSameEvData(elem, newElem) ) { return }
+      const data = convertEvToVisData(newElem, {id: newElem.nid})
+      sim.EV[newElem.id] = newElem
+      nodeToUpdate.push(data)
+    })
+    sim.order.forEach( elem => {
+      const newElem = setOrderForTurn(sim.turn, Object.assign({}, elem))
+      if ( isSameOrderData(elem, newElem) ) { return }
+      const data = convertOrderToVisData(newElem, {id: newElem.nid}, {id: newElem.eid})
+      sim.order[newElem.id] = newElem
+      nodeToUpdate.push(data.node)
+      edgeToUpdate.push(data.edge)
+    })
+    visjs.nodes.update(nodeToUpdate)
+    visjs.edges.update(edgeToUpdate)
+
+    sim.ele = precalcedScore[sim.turn].ele
+    sim.score = precalcedScore[sim.turn].score
+  }
+
+  const isSameEvData = (ev1, ev2) => {
+    if ( ev1.charge != ev2.charge ) { return false }
+    if ( ev1.v1 != ev2.v1 || ev1.v2 != ev2.v2 ) { return false }
+    if ( ev1.d1 != ev2.d1 || ev1.d2 != ev2.d2 ) { return false }
+    if ( ev1.order.length != ev2.order.length ) { return false }
+    if ( ev1.command.type != ev2.command.type || ev1.command.param != ev2.command.param ) { return false }
+    for (let i = 0; i < ev1.order.length; i++) {
+      if ( ev1.order[i] != ev2.order[i] ) { return false }
+    }
+    return true
+  }
+
+  const isSameOrderData = (o1, o2) => {
+    if ( o1.visible != o2.visible || o1.nodeVisible != o2.nodeVisible || o1.edgeVisible != o2.edgeVisible ) { return false }
+    if ( o1.fromNode != o2.fromNode || o1.toNode != o2.toNode ) { return false }
+    if ( o1.nodePosId != o2.nodePosId ) { return false }
+    if ( o1.ended != o2.ended ) { return false }
+    return true
+  }
+  Vue.watch(() => sim.turn, updateSimulation)
+
+  const auto_play = Vue.ref(false)
+  const auto_play_button = Vue.computed(() => auto_play.value ? "■" : "▶︎")
+  const speed = Vue.ref(3)
+  const SPEED_DEF = [
+    {step: 1, timeout: 1000},
+    {step: 1, timeout: 500},
+    {step: 1, timeout: 300},
+    {step: 1, timeout: 100},
+    {step: 1, timeout: 10},
+    {step: 2, timeout: 10},
+    {step: 3, timeout: 10},
+    {step: 5, timeout: 10},
+    {step: 10, timeout: 10},
+    {step: 20, timeout: 10},
+    {step: 50, timeout: 10}
+  ]
+  const playToggle = () => {
+    auto_play.value = !auto_play.value
+    if ( auto_play.value ) { play() }
+  }
+
+  const play = () => {
+    if ( !auto_play.value ) { return }
+    if ( sim.turn >= input.temporal.T_max ) { 
+      auto_play.value = false
+      return 
+    }
+    sim.turn = Math.min(sim.turn + SPEED_DEF[speed.value].step, input.temporal.T_max)
+    setTimeout(play, SPEED_DEF[speed.value].timeout)
+  }
+
+  return {auto_play_button, playToggle, speed}
+}
+
+const useStats = (input, graph, visjs, vislog, sim, vislog_ts) => {
+  // stats object
+  const stats = Vue.reactive({
+    EV: [],
+  })
+
+  const calcStas = () => {
+    stats.EV.splice(0)
+    // if initial, quit
+    if ( vislog.dayData.length == 0 ) { return }
+
+    // EV history
+    const T = input.temporal.T_max
+    const gcolor = ['#ff0000', '#00ff00', '#ffff00', '#00ffff']
+    for (let i = 0; i < vislog.EV.length; i++) {
+      const data = {
+        id: i + 1,
+        x: vislog.EV[i].x + 1,
+        Chg: vislog.EV[i].Chg,
+        dummy: false,
+        score: 0,
+        history: [],
+        order: [],
+      }
+      let cur = null
+      for (let t = 0; t < T; t++) {
+        const ev_turn_data = vislog.dayData[sim.day - 1].turn_data[t].EV[i]
+        if ( cur != null && cur.group == COM_TYPE[ev_turn_data.command.type].group ) { continue }
+        if ( cur != null ) {
+          data.history.push(setHistoryStyleData(cur, t, gcolor[cur.group]))
+        }
+        cur = {start_time: t, group: COM_TYPE[ev_turn_data.command.type].group}
+      }
+      data.history.push(setHistoryStyleData(cur, T, gcolor[cur.group]))
+      stats.EV.push(data)
+    }
+    // dummy EV data for unpicked orders
+    stats.EV.push({
+      id: vislog.EV.length,
+      x: 0,
+      Chg: 0,
+      dummy: true,
+      score: 0,
+      history: [],
+      order: [],
+    })
+
+    // Order history
+    vislog.dayData[sim.day - 1].order.forEach(o => {
+      const data = {
+        id: o.id + 1,
+        from: o.from + 1,
+        to: o.to + 1,
+        dist: o.dist,
+        score: 0,
+        history: [],
+      }
+      data.history.push(setHistoryStyleData({start_time: o.start_time}, Math.min(o.pickup, T), '#00ffff'))
+      if ( o.pickup <= T && o.end_time <= T ) {
+        const T_wait = o.end_time - o.start_time
+        const score = input.score.a_trans_fee * o.dist - input.score.a_trans_penalty * (T_wait - o.dist) * (T_wait - o.dist)
+        data.score = Math.max(0, score)
+        data.history.push(setHistoryStyleData({start_time: o.pickup}, o.end_time, '#0080ff'))
+      }
+      if ( o.vid != -1 ) {
+        stats.EV[o.vid].order.push(data)
+        stats.EV[o.vid].score += data.score
+      } else {
+        stats.EV[vislog.EV.length].order.push(data)
+      }
+    })
+  }
+  Vue.watch(vislog_ts, calcStas)
+  Vue.watch(() => sim.day, calcStas)
+
+  const setHistoryStyleData = (data, end_time, color) => {
+    const T = input.temporal.T_max
+    data.end_time = end_time
+    data.style = {
+      left: `${(data.start_time / T * 100).toFixed(2)}%`,
+      width: `${((data.end_time - data.start_time) / T * 100).toFixed(2)}%`,
+      backgroundColor: color,
+    }
+    return data
+  }
+
+  return {stats}
+}
+
+const App = {
+  setup() {
+    // input data
+    const input = Vue.reactive({
+      budget: 0,
+      temporal: {},
+      graph: {V: 0, E: 0},
+      score: {},
+      demand: [],
+      asset: {
+        PV: [],
+        FE: [],
+        RB: [],
+        EVC: [],
+        V: [],
+      },
+      shelter: [],
+    })
+    const graph = {nodes:[], edges:[]}
+
+    // initialize map (vis.js)
+    const visjs = {map: null, nodes: new vis.DataSet(), edges: new vis.DataSet()}
+    Vue.onMounted(() => {
+      const container = document.getElementById('map')
+      const options = {interaction: {dragNodes: false, tooltipDelay: 100}, physics: {enabled: false}}
+      visjs.map = new vis.Network(container, {}, options);
+    })
+
+    // visualize log
+    const vislog_ts = Vue.ref(0)
+    const vislog = {
+      nanogrid: [],
+      EV: [],
+      dayData: [],
+      timestamp: vislog_ts,
+    }
+
+    // simulation data
+    const sim = Vue.reactive({
+      daySelectionData: [],
+      day: 1,
+      turn: 0,
+      order: [],
+      EV: [],
+      ele: {C_balance: 0, d_C_grid: 0, d_C_EV: 0, d_C_EV_ret: 0, L_FE: 0, L_buy: 0},
+      score: {trans: 0, ele: 0, env: 0}
+    })
+
+    return {
+      input,
+      vislog_ts,
+      sim,
+      ...useInputFile(input, graph, visjs),
+      ...useMapForInput(input, graph, visjs),
+      ...useVislogFile(input, graph, visjs, vislog),
+      ...useSimulation(input, graph, visjs, vislog, sim, vislog_ts),
+      ...useStats(input, graph, visjs, vislog, sim, vislog_ts),
+    }
+  }
+}
+Vue.createApp(App).mount('#app')
+</script>
 </body>
 </html>
