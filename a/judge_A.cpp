@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <list>
 #include <map>
 #include <queue>
 #include <random>
@@ -27,6 +28,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 class node {
@@ -980,11 +982,11 @@ class AlgorithmData {
   int penaltyOrder = 0, numOrders = 0;
   int pEvent = 0;
   int numEnergyVehicles = 0;
-  std::vector<std::vector<int>> distances, patternPredictedEnergyBalance;
+  std::vector<std::vector<int>> distances;
+  std::vector<std::vector<int>> patternPredictedEnergyBalance;
   std::vector<Grid *> grids, vertexToGrid;
-  std::vector<std::vector<Grid *>> gridsPerDistance;
-  std::vector<Order *> orders = std::vector<Order *>(1024000);
-  std::vector<Order *> ordersById = std::vector<Order *>(1024000);
+  std::vector<Order *> orders = std::vector<Order *>(102400);
+  std::vector<Order *> ordersById = std::vector<Order *>(102400);
   std::vector<Vehicle *> vehicles;
   std::vector<Command *> solCommands;
   std::vector<Command *> evalCommands = std::vector<Command *>();
@@ -994,10 +996,25 @@ class AlgorithmData {
   std::vector<Plan *> declaredPlan;
   size_t N_EV = 0;
   int disastertime = -1;
-  std::vector<std::vector<int>> edges;
+  std::vector<std::vector<std::pair<int, int>>> edges;
   const int VERY_LONG_DISTANCE = 100000;
   StringBuilder *out = new StringBuilder();
 };
+struct dist_data {
+  int u;
+  int v;
+  int distance;
+};
+bool operator==(const dist_data &dd1, const dist_data &dd2) {
+  return dd1.u == dd2.u and dd1.v == dd2.v;
+}
+namespace std {
+template <> struct hash<dist_data> {
+  size_t operator()(const dist_data &dd) const {
+    return (dd.u << 16) + dd.v;
+  }
+};
+}
 class Algorithm {
   public:
   AlgorithmData A_Data;
@@ -1005,7 +1022,7 @@ class Algorithm {
   ~Algorithm() { ; }
   Algorithm(AlgorithmID algId) : AlgID(algId) {}
   inline AlgorithmID getID() { return AlgID; }
-  virtual void init();
+  virtual void init(const std::vector<vertex> &v);
   virtual std::string exec(std::vector<std::string> &args) = 0;
   static AlgorithmID CheckID(const int &id) {
     if (id > AlgorithmID::BEGIN_ID && id < AlgorithmID::END_ID) {
@@ -1015,9 +1032,18 @@ class Algorithm {
   }
   protected:
   const AlgorithmID AlgID;
+  std::vector<vertex> vertices;
+  double xydist_to_edgedist;
+  int distance_estimatoor(int v1, int v2) const;
   virtual void updateDistances();
   virtual void dijkstra(int v1);
-  virtual void printDistances();
+  int dijkstra_distance(int v1, int v2) const;
+  std::vector<int> dijkstra(int v1, int v2) const;
+  virtual std::vector<int> vec_dijkstra(int v1);
+  template <class H> int A_star_distance(int v1, int v2, const H &h) const;
+  int A_star_distance(int v1, int v2) const;
+  std::vector<int> A_star(int v1, int v2) const;
+  std::pair<std::vector<int>, std::vector<int>> A_star2(int v1, int v2) const;
   virtual void dumpGridsPerDistance();
 };
 static unsigned long long DijkstraNode_SeqCounter = 0;
@@ -1038,7 +1064,8 @@ class DijkstraNode {
     }
   }
 };
-void Algorithm::init() {
+void Algorithm::init(const std::vector<vertex> &v) {
+  vertices = v;
   updateDistances();
   fprintf(stderr, "Solution: %d\n", 1);
   VectorHelper::fillPtr(A_Data.ordersById, (Order *)nullptr);
@@ -1060,7 +1087,225 @@ void Algorithm::init() {
   for (int i = 0; i < A_Data.numVehicles - A_Data.numEnergyVehicles; i++)
     A_Data.vehicles[i]->type = 1;
 }
+constexpr double sq(double x) { return x * x; }
+int Algorithm::distance_estimatoor(int v1, int v2) const {
+  return sqrt(sq(vertices[v1].x - vertices[v2].x) +
+              sq(vertices[v1].y - vertices[v2].y)) *
+         xydist_to_edgedist;
+}
+int Algorithm::dijkstra_distance(int v1, int v2) const {
+  using namespace std;
+  vector<int> dist(A_Data.numVertexes + 1, A_Data.VERY_LONG_DISTANCE);
+  dist[v1] = 0;
+  vector<bool> is_closed(A_Data.numVertexes + 1, false);
+  priority_queue<DijkstraNode, vector<DijkstraNode>, greater<DijkstraNode>>
+  candidate;
+  DijkstraNode top(v1);
+  top.distance = 0;
+  candidate.push(top);
+  while (!candidate.empty()) {
+    DijkstraNode top = candidate.top();
+    candidate.pop();
+    int pivot = top.vertex;
+    if (pivot == v2)
+      break;
+    if (is_closed[pivot])
+      continue;
+    is_closed[pivot] = true;
+    for (auto [v, d] : A_Data.edges[pivot]) {
+      if (dist[pivot] + d < dist[v]) {
+        dist[v] = dist[pivot] + d;
+        DijkstraNode new_node(v);
+        new_node.distance = dist[v];
+        candidate.push(new_node);
+      }
+    }
+  }
+  return dist[v2];
+}
+std::vector<int> Algorithm::dijkstra(int v1, int) const {
+  using namespace std;
+  vector<int> dist(A_Data.numVertexes + 1, A_Data.VERY_LONG_DISTANCE);
+  dist[v1] = 0;
+  vector<bool> is_closed(A_Data.numVertexes + 1, false);
+  priority_queue<DijkstraNode, vector<DijkstraNode>, greater<DijkstraNode>>
+  candidate;
+  DijkstraNode top(v1);
+  top.distance = 0;
+  candidate.push(top);
+  while (!candidate.empty()) {
+    DijkstraNode top = candidate.top();
+    candidate.pop();
+    int pivot = top.vertex;
+    if (is_closed[pivot])
+      continue;
+    is_closed[pivot] = true;
+    for (auto [v, d] : A_Data.edges[pivot]) {
+      if (dist[pivot] + d < dist[v]) {
+        dist[v] = dist[pivot] + d;
+        DijkstraNode new_node(v);
+        new_node.distance = dist[v];
+        candidate.push(new_node);
+      }
+    }
+  }
+  for (size_t i = 0; i < dist.size(); ++i)
+    dist[i] = is_closed[i] ? dist[i] : A_Data.VERY_LONG_DISTANCE;
+  return dist;
+}
+template <class H>
+int Algorithm::A_star_distance(int v1, int v2, const H &h) const {
+  using namespace std;
+  vector<int> dist(A_Data.numVertexes + 1, A_Data.VERY_LONG_DISTANCE);
+  dist[v1] = 0;
+  vector<bool> is_closed(A_Data.numVertexes + 1, false);
+  priority_queue<DijkstraNode, vector<DijkstraNode>, greater<DijkstraNode>>
+  candidate;
+  DijkstraNode top(v1);
+  top.distance = h(v1, v2);
+  candidate.push(top);
+  while (!candidate.empty()) {
+    DijkstraNode top = candidate.top();
+    candidate.pop();
+    int pivot = top.vertex;
+    if (pivot == v2)
+      break;
+    if (is_closed[pivot])
+      continue;
+    is_closed[pivot] = true;
+    for (auto [v, d] : A_Data.edges[pivot]) {
+      if (dist[pivot] + d < dist[v]) {
+        dist[v] = dist[pivot] + d;
+        DijkstraNode new_node(v);
+        new_node.distance = dist[v] + h(v, v2);
+        candidate.push(new_node);
+      }
+    }
+  }
+  return dist[v2];
+}
+int Algorithm::A_star_distance(int v1, int v2) const {
+  using namespace std;
+  vector<int> dist(A_Data.numVertexes + 1, A_Data.VERY_LONG_DISTANCE);
+  dist[v1] = 0;
+  vector<bool> is_closed(A_Data.numVertexes + 1, false);
+  priority_queue<DijkstraNode, vector<DijkstraNode>, greater<DijkstraNode>>
+  candidate;
+  DijkstraNode top(v1);
+  top.distance = distance_estimatoor(v1, v2);
+  candidate.push(top);
+  while (!candidate.empty()) {
+    DijkstraNode top = candidate.top();
+    candidate.pop();
+    int pivot = top.vertex;
+    if (pivot == v2)
+      break;
+    if (is_closed[pivot])
+      continue;
+    is_closed[pivot] = true;
+    for (auto [v, d] : A_Data.edges[pivot]) {
+      if (dist[pivot] + d < dist[v]) {
+        dist[v] = dist[pivot] + d;
+        DijkstraNode new_node(v);
+        new_node.distance = dist[v] + distance_estimatoor(v, v2);
+        candidate.push(new_node);
+      }
+    }
+  }
+  return dist[v2];
+}
+std::vector<int> Algorithm::A_star(int v1, int v2) const {
+  using namespace std;
+  vector<int> dist(A_Data.numVertexes + 1, A_Data.VERY_LONG_DISTANCE);
+  dist[v1] = 0;
+  vector<bool> is_closed(A_Data.numVertexes + 1, false);
+  priority_queue<DijkstraNode, vector<DijkstraNode>, greater<DijkstraNode>>
+  candidate;
+  DijkstraNode top(v1);
+  top.distance = distance_estimatoor(v1, v2);
+  candidate.push(top);
+  while (!candidate.empty()) {
+    DijkstraNode top = candidate.top();
+    candidate.pop();
+    int pivot = top.vertex;
+    if (pivot == v2)
+      break;
+    if (is_closed[pivot])
+      continue;
+    is_closed[pivot] = true;
+    for (auto [v, d] : A_Data.edges[pivot]) {
+      if (dist[pivot] + d < dist[v]) {
+        dist[v] = dist[pivot] + d;
+        DijkstraNode new_node(v);
+        new_node.distance = dist[v] + distance_estimatoor(v, v2);
+        candidate.push(new_node);
+      }
+    }
+  }
+  return dist;
+}
+std::pair<std::vector<int>, std::vector<int>> Algorithm::A_star2(int v1,
+                                                                 int v2) const {
+  using namespace std;
+  vector<int> dist(A_Data.numVertexes, A_Data.VERY_LONG_DISTANCE);
+  vector<int> from(A_Data.numVertexes, -1);
+  dist[v1] = 0;
+  from[v1] = v1;
+  vector<bool> is_closed(A_Data.numVertexes + 1, false);
+  priority_queue<DijkstraNode, vector<DijkstraNode>, greater<DijkstraNode>>
+  candidate;
+  DijkstraNode top(v1);
+  top.distance = distance_estimatoor(v1, v2);
+  candidate.push(top);
+  while (!candidate.empty()) {
+    DijkstraNode top = candidate.top();
+    candidate.pop();
+    int pivot = top.vertex;
+    if (pivot == v2)
+      break;
+    if (is_closed[pivot])
+      continue;
+    is_closed[pivot] = true;
+    for (auto [v, d] : A_Data.edges[pivot]) {
+      if (dist[pivot] + d < dist[v]) {
+        dist[v] = dist[pivot] + d;
+        from[v] = pivot;
+        DijkstraNode new_node(v);
+        new_node.distance = dist[v] + distance_estimatoor(v, v2);
+        candidate.push(new_node);
+      }
+    }
+  }
+  return std::make_pair(dist, from);
+}
 void Algorithm::dijkstra(int v1) {
+  A_Data.distances[v1][v1] = 0;
+  std::priority_queue<DijkstraNode, std::vector<DijkstraNode>,
+                      std::greater<DijkstraNode>>
+  candidate;
+  DijkstraNode top(v1);
+  top.distance = 0;
+  candidate.push(top);
+  int skipcnt = 0;
+  while (!candidate.empty()) {
+    DijkstraNode top = candidate.top();
+    candidate.pop();
+    int pivot = top.vertex;
+    if (A_Data.distances[v1][pivot] < top.distance) {
+      skipcnt++;
+      continue;
+    }
+    for (auto [v, d] : A_Data.edges[pivot]) {
+      if (A_Data.distances[v1][pivot] + d < A_Data.distances[v1][v]) {
+        A_Data.distances[v1][v] = A_Data.distances[v1][pivot] + d;
+        DijkstraNode new_node(v);
+        new_node.distance = A_Data.distances[v1][v];
+        candidate.push(new_node);
+      }
+    }
+  }
+}
+std::vector<int> Algorithm::vec_dijkstra(int v1) {
   std::vector<int> dist(A_Data.numVertexes + 1);
   VectorHelper::fill(dist, A_Data.VERY_LONG_DISTANCE);
   dist[v1] = 0;
@@ -1079,85 +1324,59 @@ void Algorithm::dijkstra(int v1) {
       skipcnt++;
       continue;
     }
-    A_Data.distances[v1][pivot] = dist[pivot];
     int edgesPivotCnt = 0;
-    for (int v : A_Data.edges[pivot]) {
+    for (auto [v, d] : A_Data.edges[pivot]) {
       edgesPivotCnt++;
-      if (dist[pivot] + A_Data.distances[pivot][v] < dist[v]) {
-        dist[v] = dist[pivot] + A_Data.distances[pivot][v];
+      if (dist[pivot] + d < dist[v]) {
+        dist[v] = dist[pivot] + d;
         DijkstraNode new_node(v);
         new_node.distance = dist[v];
         candidate.push(new_node);
       }
     }
   }
+  return dist;
 }
 void Algorithm::updateDistances() {
+  using namespace std;
+  int maxDist = 0;
+  double ave_dist = 0;
   if (is_first == 0) {
     is_first = 1;
     fprintf(stderr, "Start preprocess for graph (Dijkstra method) ");
     int indicator = 1;
+    A_Data.distances.resize(A_Data.numVertexes);
+    for (int i = 0; i < A_Data.numVertexes; i++) {
+      A_Data.distances[i].resize(A_Data.numVertexes);
+      for (int j = 0; j < A_Data.numVertexes; j++)
+        A_Data.distances[i][j] = A_Data.VERY_LONG_DISTANCE;
+      A_Data.distances[i][i] = 0;
+    }
     for (int i = 0; i < A_Data.numVertexes; i++) {
       if (i == indicator * A_Data.numVertexes / 20) {
         fprintf(stderr, ".");
         indicator++;
       }
       dijkstra(i);
+      auto d = vec_dijkstra(i);
+      for (int j = i + 1; j < A_Data.numVertexes; j++) {
+        maxDist = std::max(maxDist, d[j]);
+        ave_dist += d[j];
+      }
     }
+    int x_min = 60000, x_max = -60000, y_min = 60000, y_max = -60000;
+    for (auto &vertex : vertices)
+      x_min = std::min(x_min, vertex.x), x_max = std::max(x_max, vertex.x),
+      y_min = std::min(y_min, vertex.y), y_max = std::max(y_max, vertex.y);
+    xydist_to_edgedist =
+    1.0 * maxDist / ((x_max - x_min) + (y_max - y_min)) * 1.1;
+    ;
     distance_vertex = A_Data.distances;
     fprintf(stderr, "%s\n", "complete.");
   } else
     A_Data.distances = distance_vertex;
-  int maxDist = 0;
-  double ave_dist = 0;
-  for (int i = 0; i < A_Data.numVertexes; i++) {
-    std::vector<int> &d = A_Data.distances[i];
-    for (int j = i + 1; j < A_Data.numVertexes; j++) {
-      maxDist = std::max(maxDist, d[j]);
-      ave_dist += d[j];
-    }
-  }
-  maxDist++;
- 
-                                                                  ;
-  std::vector<Grid *> aux(maxDist * A_Data.numGrids);
-  A_Data.gridsPerDistance.resize(A_Data.numVertexes + 1);
-  for (int i = 0; i < A_Data.numVertexes; i++) {
-    std::vector<int> &d = A_Data.distances[i];
-    size_t cnt = 0;
-    for (auto const &g : A_Data.grids) {
-      int c = maxDist - d[g->vertex];
-      for (int j = 0; j < c; j++) {
-        aux[cnt++] = g;
-      }
-    }
-    A_Data.gridsPerDistance[i].resize(cnt);
-    for (size_t j = 0; j < cnt; j++) {
-      A_Data.gridsPerDistance[i][j] = aux[j];
-    }
-  }
-}
-void Algorithm::printDistances() {
-  for (size_t i = 0; i < A_Data.distances.size(); i++) {
-    for (size_t j = 0; j < A_Data.distances[i].size(); j++) {
-      if (false) fprintf(stderr, "###Distances[%zu][%zu]=%d\n", i, j,
-                          A_Data.distances[i][j]);
-    }
-  }
 }
 void Algorithm::dumpGridsPerDistance() {
-  for (size_t i = 0; i < A_Data.gridsPerDistance.size(); i++) {
-    if (A_Data.gridsPerDistance[i].size() == 0) {
-      continue;
-    }
-    size_t currLen = A_Data.gridsPerDistance[i].size();
-    for (size_t j = 0; j < currLen; j++) {
-      if (false) fprintf(stderr, "gridsPerDistance[%zu][%zu]=%d,", i, j,
-                          A_Data.gridsPerDistance[i][j]->vertex);
-      if (j > 0 && (j % 3 == 0)) {
-      }
-    }
-  }
 }
 class Main : public Algorithm {
   public:
@@ -1178,6 +1397,7 @@ class Main : public Algorithm {
   int runPlans(std::vector<Plan *> &plans, Vehicle *v, int time);
   public:
   int dist(int v1, int v2);
+  int dist(int v1, int v2, int &next);
   int dist(Vehicle *v, int vertex);
   private:
   void planEnergy(std::vector<Command *> &bestCommands, int time);
@@ -1251,6 +1471,7 @@ void Main::before(int time) {
   }
 }
 void Main::planOrders(int time) {
+  static size_t called1 = 0;
   ;
   ;
   for (auto &v : A_Data.vehicles) {
@@ -1411,6 +1632,8 @@ void Main::planOrders(int time) {
                 if (g->charge < g->C_g_max * 0.25) {
                   continue;
                 }
+                if (++called1 % 10000 == 0)
+                  ;
                 int nd = dist(g->vertex, p->vertex) - d;
                 if (prevVertex == -1) {
                   nd += dist(v, g->vertex);
@@ -1484,6 +1707,8 @@ int Main::evalPlans(std::vector<Plan *> &plans,
                     Vehicle *v,
                     int time,
                     int limit) {
+  static size_t called1 = 0;
+  static size_t called2 = 0;
   int val = 0;
   int t = time;
   int prevVertex = -1;
@@ -1500,6 +1725,8 @@ int Main::evalPlans(std::vector<Plan *> &plans,
       return -1000000;
     }
     int d = 0;
+    if (++called1 % 500000 == 0)
+      ;
     if (prevVertex == -1) {
       d = dist(v, p->vertex);
     } else {
@@ -1516,6 +1743,8 @@ int Main::evalPlans(std::vector<Plan *> &plans,
       return -1;
     }
     if (p->type == PlanType::recharge || p->type == PlanType::recharging) {
+      if (++called2 % 10000 == 0)
+        ;
       v->evalCharge += p->charge;
       if (p->charge > 0)
         t += (p->charge + v->V_in_max - 1) / v->V_in_max;
@@ -1567,10 +1796,41 @@ int Main::runPlans(std::vector<Plan *> &plans, Vehicle *v, int time) {
   return t;
 }
 int Main::dist(int v1, int v2) {
+  int dummy;
+  return dist(v1, v2, dummy);
+}
+int Main::dist(int v1, int v2, int &next) {
   if (A_Data.distances[v1][v2] == A_Data.VERY_LONG_DISTANCE) {
     dijkstra(v1);
   }
   return A_Data.distances[v1][v2];
+  using namespace std;
+  static std::list<dist_data> dist_cache;
+  static std::unordered_map<dist_data, std::list<dist_data>::iterator>
+  cache_reference;
+  static size_t called = 0;
+  static size_t cache_miss = 0;
+  ++called;
+  const size_t cache_size = 4 * A_Data.numVertexes;
+  dist_data key{v1, v2, 0};
+  if (cache_reference.count(key) == 0) {
+    cache_miss++;
+    ;
+    key.distance = dijkstra_distance(v1, v2);
+    if (dist_cache.size() > cache_size) {
+      cache_reference.erase(dist_cache.back());
+      dist_cache.pop_back();
+    }
+  } else {
+    key.distance = cache_reference[key]->distance;
+    dist_cache.erase(cache_reference[key]);
+  }
+  if (called % 50000 == 0)
+   
+                     ;
+  dist_cache.push_front(key);
+  cache_reference[key] = dist_cache.begin();
+  return key.distance;
 }
 int Main::dist(Vehicle *v, int vertex) {
   if (v->vertex1 == v->vertex2) {
@@ -1580,7 +1840,10 @@ int Main::dist(Vehicle *v, int vertex) {
                   dist(v->vertex2, vertex) + v->dist2);
 }
 std::string Main::process(int time, int idx) {
+  using namespace std;
   Vehicle *v = A_Data.vehicles[idx];
+  static size_t called1 = 0;
+  static size_t called2 = 0;
   if (v->type == 1) {
     ;
     ;
@@ -1600,12 +1863,23 @@ std::string Main::process(int time, int idx) {
           ;
           ;
           if (v->charge >= v->Delta_move) {
+            int next = -1;
             int d = dist(v->vertex1, p->vertex);
+            if (++called1 % 10000 == 0)
+              ;
+           
+                                ;
             for (auto const &i : v->adj) {
+              ;
+             
+                                                            ;
               if (dist(v->vertex1, i) + dist(i, p->vertex) == d) {
                 return "move " + std::to_string(i);
               }
             }
+            ;
+            ;
+            ;
             ;
             exit(1);
           } else {
@@ -1703,6 +1977,10 @@ std::string Main::process(int time, int idx) {
       }
     }
     if (v->vertex1 != v->target && v->target != -1) {
+      int next = -1;
+      int d = dist(v->vertex1, v->target, next);
+      if (++called2 % 10000 == 0)
+        ;
       if (v->vertex2 != v->vertex1) {
         return "move " + std::to_string(v->vertex2);
       }
@@ -1949,11 +2227,7 @@ Grid *Main::randomGrid(Vehicle *vehicle,
                        int time,
                        Command *ignore) {
   int vertex = findVertex(vehicle, commands, start, time, ignore);
-  std::vector<Grid *> g = A_Data.gridsPerDistance[vertex];
-  if (g.empty()) {
-    return A_Data.grids[A_Data.rnd->nextInt(A_Data.numGrids)];
-  }
-  return g[A_Data.rnd->nextInt(g.size())];
+  return A_Data.grids[A_Data.rnd->nextInt(A_Data.numGrids)];
 }
 int Main::findVertex(Vehicle *vehicle,
                      std::vector<Command *> &commands,
@@ -2881,7 +3155,7 @@ bool judge::next_time_step() {
       do { if (!((size_t)orders[T_now][i].to < V)) exit(1); } while (0);
     }
   }
-  if (false) fprintf(stderr, "###Debug %s(%d),energies.size=%zu\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp",
+  if (false) fprintf(stderr, "###Debug %s(%d),energies.size=%zu\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp",
                       259, energies.size());
   for (size_t i = 0; i < N_nano; i++) {
     info_day.push(energies[T_now][i]);
@@ -3343,7 +3617,7 @@ void judge::getGraphData(FILE *) {
   ;
   if (false) fprintf(
   stderr, "###Debug %s(%d): %zu vertices and %zu edges will be loaded.\n",
-  "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 925, N, M);
+  "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 925, N, M);
   v.resize(N);
   v_p.resize(N);
   for (size_t i = 0; i < N; i++) {
@@ -3392,7 +3666,7 @@ void judge::getDemandData(FILE *) {
   readLineSkipComment();
   N_demand = std::stoi(s[0]);
   N_nano = N_pattern = N_demand;
-  if (false) fprintf(stderr, "###Debug %s(%d), N_demand=%zu\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp",
+  if (false) fprintf(stderr, "###Debug %s(%d), N_demand=%zu\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp",
                       1000, N_demand);
   demand = Demand(N_day, N_demand, N_div);
   size_t i, j, k;
@@ -3621,7 +3895,7 @@ void judge::getShelterData(FILE *) {
     shlt.shelter_data[i].x = std::stoi(s[0]) - 1;
     shlt.shelter_data[i].p = std::stoi(s[1]);
   }
-  if (false) fprintf(stderr, "###Debug %s(%d), N_div=%zu\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp",
+  if (false) fprintf(stderr, "###Debug %s(%d), N_div=%zu\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp",
                       1304, N_div);
   readLineSkipComment();
   for (size_t i = 0; i < s.size(); i++) {
@@ -3871,13 +4145,13 @@ std::string judge::set_Algorithm_Initial_Input1(const bool submitFlag,
     radtype = RadiationCalcType::CT_DUMMY;
   }
   if (false) fprintf(stderr, "###Debug %s(%d): before fprintf: N_sol=%zu\n",
-                      "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 1675, N_sol);
+                      "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 1675, N_sol);
   main.A_Data.numSol = N_sol;
   if (false) fprintf(stderr, "###Debug %s(%d): before fprintf: N=%zu,M=%zu\n",
-                      "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 1679, N, M);
+                      "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 1679, N, M);
   main.A_Data.numVertexes = N;
   main.A_Data.numEdges = M;
-  if (main.A_Data.distances.size() == 0) {
+  if (main.A_Data.edges.size() == 0) {
     ;
     ;
     main.A_Data.distances = RectangularVectors::RectangularIntVector(
@@ -3894,32 +4168,18 @@ std::string judge::set_Algorithm_Initial_Input1(const bool submitFlag,
                         "###Debug Daytype=%zu,N_pattern=%zu,dumping u v d...\n",
                         Daytype, N_pattern);
     do { if (!(M == (size_t)main.A_Data.numEdges)) exit(1); } while (0);
+    main.A_Data.edges.resize(main.A_Data.numVertexes);
     for (size_t i = 0; i < M; i++) {
       size_t v1 = u_output[i], v2 = v_output[i], d = c_output[i];
       --v1, --v2;
       do { if (!((int)v1 < main.A_Data.numVertexes)) exit(1); } while (0);
       do { if (!((int)v2 < main.A_Data.numVertexes)) exit(1); } while (0);
       main.A_Data.distances[v1][v2] = main.A_Data.distances[v2][v1] = d;
+      main.A_Data.edges[v1].emplace_back(v2, d);
+      main.A_Data.edges[v2].emplace_back(v1, d);
     }
-    {
-      main.A_Data.edges =
-      std::vector<std::vector<int>>(main.A_Data.numVertexes);
-      for (int i = 0; i < main.A_Data.numVertexes; ++i) {
-        int len = 0;
-        for (int j = 0; j < main.A_Data.numVertexes; ++j) {
-          len +=
-          main.A_Data.distances[i][j] < main.A_Data.VERY_LONG_DISTANCE ? 1 : 0;
-        }
-        main.A_Data.edges[i] = std::vector<int>(len);
-        int cnt = 0;
-        for (int j = 0; j < main.A_Data.numVertexes; ++j) {
-          if (main.A_Data.distances[i][j] < main.A_Data.VERY_LONG_DISTANCE) {
-            do { if (!(cnt < len)) exit(1); } while (0);
-            main.A_Data.edges[i][cnt++] = j;
-          }
-        }
-      }
-    }
+    for (auto &edge : main.A_Data.edges)
+      edge.shrink_to_fit();
   }
   main.A_Data.dayType = Daytype;
   main.A_Data.numDivs = N_div;
@@ -4076,7 +4336,7 @@ std::string judge::set_Algorithm_Initial_Input1(const bool submitFlag,
   ;
   if (false) fprintf(stderr,
                       "###Debug %s(%d), N_nano = %zu, Grid_Info.N_grid = %zu\n",
-                      "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 1961, N_nano, Grid_Info.N_grid);
+                      "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 1970, N_nano, Grid_Info.N_grid);
   std::cerr << "pw:\n";
   for (size_t i = 0; i < N_pattern; ++i) {
     std::cerr << "  pattern: " << i << "\n    ";
@@ -4423,7 +4683,7 @@ std::string judge::run_Algorithm(const bool submitFlag,
   std::string result = "OK";
   if (time == 0) {
     ;
-    main.init();
+    main.init(v);
   }
   if (time % (main.A_Data.tMax / 5) == 0) {
     fprintf(stderr, "time = %zu\n", time);
@@ -4437,10 +4697,10 @@ std::string judge::run_Algorithm(const bool submitFlag,
       g->prevBuy = this->g.nodes[i].pw_buy;
     }
   }
-  if (false) fprintf(stderr, "###Debug %s(%d),vehicles.size=%zu\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp",
-                      2591, vehicles.size());
+  if (false) fprintf(stderr, "###Debug %s(%d),vehicles.size=%zu\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp",
+                      2600, vehicles.size());
   for (size_t i = 0; i < N_vehicle; i++) {
-    if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 2595,
+    if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 2604,
                         i);
     int u, v;
     size_t N_can_go, dist_u, dist_v;
@@ -4751,8 +5011,8 @@ double main2() {
     if (Common.StrLine == TEXT_end) {
       break;
     }
-    if (false) fprintf(stderr, "###Debug %s(%d),cmd=[%s]\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp",
-                        3127, cmd.c_str());
+    if (false) fprintf(stderr, "###Debug %s(%d),cmd=[%s]\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp",
+                        3136, cmd.c_str());
     Common.processQueryCommand(cmd, contestant_output);
     ;
     fflush(contestant_output);
@@ -4765,10 +5025,10 @@ double main2() {
     ;
     Common.readLineSkipComment();
     cmd = Common.StrLine;
-    if (false) fprintf(stderr, "###Debug %s(%d),cmd=%s\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 3153,
+    if (false) fprintf(stderr, "###Debug %s(%d),cmd=%s\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 3162,
                         cmd.c_str());
     int argc = StringHelper::SplitToken(cmd, " ", cmd_args);
-    if (false) fprintf(stderr, "###Debug %s(%d),argc=%d\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 3156,
+    if (false) fprintf(stderr, "###Debug %s(%d),argc=%d\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 3165,
                         argc);
     for (int i = 0; i < argc; i++) {
       if (false) fprintf(stderr, "###Debug arg[%d]=%s\n", i,
@@ -4803,10 +5063,10 @@ double main2() {
       int T_acc = random_helper.nextInt(Common.T_max);
       StatusOnAcc acc_stat(Day_acc, T_acc);
       if (false) fprintf(stderr, "###Debug %s(%d),Common.N_day=%zu\n",
-                          "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 3202, Common.N_day);
+                          "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 3211, Common.N_day);
       for (size_t i = 0; i < Common.N_day; i++) {
-        if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp",
-                            3205, i);
+        if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp",
+                            3214, i);
         ;
         double day_score =
         run_alg(true, args, Common, time_step_result, i, &acc_stat);
@@ -4821,7 +5081,7 @@ double main2() {
       for (size_t i = 0; i < Acc_Day_max; i++) {
         ;
         double use_buy =
-        run_alg(true, args, Common, time_step_result, i, &acc_stat);
+        run_alg(true, args, Common, time_step_result, Day_acc, &acc_stat);
         ;
         if (use_buy > 0) {
           break;
@@ -4844,7 +5104,7 @@ double main2() {
     else {
       if (false) fprintf(
       stderr, "###Debug %s(%d),cmd_args[0]=%s, ERROR this isn't defined\n",
-      "./tmp.upload.191236.MCP4As/judge_A/judge_A.cpp", 3253, cmd_args[0].c_str());
+      "./tmp.upload.134033.n5QRqO/judge_A/judge_A.cpp", 3262, cmd_args[0].c_str());
       exit(1);
     }
     ;
