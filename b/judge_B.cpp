@@ -1687,7 +1687,7 @@ bool judge::next_time_step() {
     do { if (!((size_t)o.orig < V)) exit(1); } while (0);
     do { if (!((size_t)o.dest < V)) exit(1); } while (0);
   }
-  if (false) fprintf(stderr, "###Debug %s(%d),energies.size=%zu\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp",
+  if (false) fprintf(stderr, "###Debug %s(%d),energies.size=%zu\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp",
                       223, energies.size());
   for (size_t i = 0; i < N_nano; i++) {
     info_day.push(energies[T_now][i]);
@@ -2198,7 +2198,7 @@ void judge::getGraphData(FILE *) {
   ;
   if (false) fprintf(
   stderr, "###Debug %s(%d): %zu vertices and %zu edges will be loaded.\n",
-  "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 1001, N, M);
+  "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 1001, N, M);
   v.resize(N);
   v_p.resize(N);
   for (size_t i = 0; i < N; i++) {
@@ -2247,7 +2247,7 @@ void judge::getDemandData(FILE *) {
   readLineSkipComment();
   N_demand = std::stoi(s[0]);
   N_nano = N_pattern = N_demand;
-  if (false) fprintf(stderr, "###Debug %s(%d), N_demand=%zu\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp",
+  if (false) fprintf(stderr, "###Debug %s(%d), N_demand=%zu\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp",
                       1076, N_demand);
   demand = Demand(N_day, N_demand, N_div);
   size_t i, j, k;
@@ -2529,7 +2529,7 @@ void judge::getShelterData(FILE *) {
     shlt.shelter_data[i].p = std::stoi(s[1]);
     assert(shlt.shelter_data[i].x < N);
   }
-  if (false) fprintf(stderr, "###Debug %s(%d), N_div=%zu\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp",
+  if (false) fprintf(stderr, "###Debug %s(%d), N_div=%zu\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp",
                       1451, N_div);
   readLineSkipComment();
   for (size_t i = 0; i < s.size(); i++) {
@@ -2777,10 +2777,10 @@ std::string judge::set_Algorithm_Initial_Input1(const bool submitFlag,
     radtype = RadiationCalcType::CT_DUMMY;
   }
   if (false) fprintf(stderr, "###Debug %s(%d): before fprintf: N_sol=%zu\n",
-                      "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 1807, N_sol);
+                      "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 1807, N_sol);
   main.A_Data.numSol = N_sol;
   if (false) fprintf(stderr, "###Debug %s(%d): before fprintf: N=%zu,M=%zu\n",
-                      "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 1811, N, M);
+                      "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 1811, N, M);
   main.A_Data.numVertexes = N;
   main.A_Data.numEdges = M;
   {
@@ -2795,7 +2795,6 @@ std::string judge::set_Algorithm_Initial_Input1(const bool submitFlag,
   do { if ((M) != (c_output.size())) { ; ; ; exit(1); } } while (0);
   main.A_Data.edges.resize(main.A_Data.numVertexes);
   for (size_t i = 0; i < M; i++) {
-    ;
     size_t v1 = u_output[i], v2 = v_output[i], d = c_output[i];
     --v1, --v2;
     do { if (!((int)v1 < main.A_Data.numVertexes)) exit(1); } while (0);
@@ -2959,7 +2958,7 @@ std::string judge::set_Algorithm_Initial_Input1(const bool submitFlag,
   N_pattern = N_nano = main.A_Data.grids.size();
   if (false) fprintf(stderr,
                       "###Debug %s(%d), N_nano = %zu, Grid_Info.N_grid = %zu\n",
-                      "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 2112, N_nano, Grid_Info.N_grid);
+                      "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 2112, N_nano, Grid_Info.N_grid);
   if (false) {
     fprintf(stderr, "###Debug N_EV=%zu\n", ev_info.N_EV);
     ev_info.dump(stderr);
@@ -3105,8 +3104,8 @@ void judge::output3(const Main &main, std::ostream &dest, bool comment) {
     }
    
                                        ;
-    dest << w.charge + 2 << " " << (w.detail->x + 1) << " " << w.yield << " "
-         << wt << std::endl;
+    dest << w.charge << " " << (w.detail->x + 1) << " " << w.yield << " " << wt
+         << std::endl;
   }
   dest << std::flush;
   std::vector<OrderB *> sendOrders;
@@ -3169,8 +3168,8 @@ void judge::dumpForDebuggingScore(std::ofstream &ev1,
   for (size_t i = 0; i < this->g.nodes.size(); i++) {
     grid2 << this->g.nodes[i].node_id << SPACE << this->g.nodes[i].cap << SPACE
           << this->g.nodes[i].max_cap << SPACE << this->g.nodes[i].pw_buy
-          << SPACE << this->g.nodes[i].L_FE << SPACE << this->g.nodes[i].L_buy
-          << SPACE << EOL;
+          << SPACE << A_Data.vertexToGrid[this->g.nodes[i].node_id]->P_FE
+          << SPACE << this->g.nodes[i].L_buy << SPACE << EOL;
   }
 }
 int judge::calc_pw_error(const size_t day, const size_t id) {
@@ -3232,10 +3231,10 @@ std::string judge::run_Algorithm(const bool submitFlag,
       g->prevLbuy = this->g.nodes[i].L_buy;
     }
   }
-  if (false) fprintf(stderr, "###Debug %s(%d),vehicles.size=%zu\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp",
+  if (false) fprintf(stderr, "###Debug %s(%d),vehicles.size=%zu\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp",
                       2823, vehicles.size());
   for (size_t i = 0; i < N_vehicle; i++) {
-    if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 2827,
+    if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 2827,
                         i);
     int u, v;
     size_t N_can_go, dist_u, dist_v;
@@ -3658,7 +3657,7 @@ void judge::do_judge(Main &main, std::vector<Command2> &commands, bool onAcc) {
                                           ;
             exit(1);
           }
-          int chg2 = chg * 100 / w.detail->Eta_work;
+          int chg2 = chg * w.detail->Eta_work / 100;
           if (chg2 + w.charge > w.detail->Cap_work_ele) {
            
                                                                     ;
@@ -3757,7 +3756,13 @@ void judge::do_judge(Main &main, std::vector<Command2> &commands, bool onAcc) {
       q.cap += delta_total;
     else
       q.cap += effective_delta;
-    q.L_FE = p->P_FE;
+    const double eta_FE = p->fe and p->fe->Eta_FE_min > 0
+                          ? 100.0 * ((p->P_FE - p->fe->P_FE_min) *
+                                     (p->fe->Eta_FE_max - p->fe->Eta_FE_min) /
+                                     (p->fe->P_FE_max - p->fe->P_FE_min) +
+                                     p->fe->Eta_FE_min)
+                          : 1;
+    q.L_FE = eta_FE * p->P_FE;
     q.L_buy = q.pw_buy;
   }
 }
@@ -3903,8 +3908,8 @@ double main2() {
     if (Common.StrLine == TEXT_end) {
       break;
     }
-    if (false) fprintf(stderr, "###Debug %s(%d),cmd=[%s]\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp",
-                        3730, cmd.c_str());
+    if (false) fprintf(stderr, "###Debug %s(%d),cmd=[%s]\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp",
+                        3737, cmd.c_str());
     Common.processQueryCommand(cmd, contestant_output);
     fflush(contestant_output);
   }
@@ -3916,10 +3921,10 @@ double main2() {
     ;
     Common.readLineSkipComment();
     cmd = Common.StrLine;
-    if (false) fprintf(stderr, "###Debug %s(%d),cmd=%s\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 3752,
+    if (false) fprintf(stderr, "###Debug %s(%d),cmd=%s\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 3759,
                         cmd.c_str());
     int argc = StringHelper::SplitToken(cmd, " ", cmd_args);
-    if (false) fprintf(stderr, "###Debug %s(%d),argc=%d\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 3755,
+    if (false) fprintf(stderr, "###Debug %s(%d),argc=%d\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 3762,
                         argc);
     for (int i = 0; i < argc; i++) {
       if (false) fprintf(stderr, "###Debug arg[%d]=%s\n", i,
@@ -3957,10 +3962,10 @@ double main2() {
       int T_acc = random_helper.nextInt(Common.T_max);
       StatusOnAcc acc_stat(Day_acc, T_acc);
       if (false) fprintf(stderr, "###Debug %s(%d),Common.N_day=%zu\n",
-                          "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 3804, Common.N_day);
+                          "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 3811, Common.N_day);
       for (size_t i = 0; i < Common.N_day; i++) {
-        if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp",
-                            3807, i);
+        if (false) fprintf(stderr, "###Debug %s(%d),i=%zu\n", "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp",
+                            3814, i);
         ;
         double day_score =
         run_alg(true, args, Common, time_step_result, i, &acc_stat);
@@ -3996,7 +4001,7 @@ double main2() {
     else {
       if (false) fprintf(
       stderr, "###Debug %s(%d),cmd_args[0]=%s, ERROR this isn't defined\n",
-      "./tmp.upload.180736.J3pfrW/judge_B/judge_B.cpp", 3852, cmd_args[0].c_str());
+      "./tmp.upload.172309.0EK1Xn/judge_B/judge_B.cpp", 3859, cmd_args[0].c_str());
       exit(1);
     }
     ;
